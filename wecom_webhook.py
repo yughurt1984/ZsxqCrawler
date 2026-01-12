@@ -4,6 +4,7 @@
 """
 import requests
 import json
+import os
 import re
 from typing import Dict, List, Optional
 from html.parser import HTMLParser
@@ -181,6 +182,95 @@ class WeComWebhook:
         except Exception as e:
             print(f"❌ 企业微信消息发送异常: {e}")
             return False
+    
+    def send_file(self, file_path: str) -> bool:
+        """
+        发送文件消息
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            是否发送成功
+        """
+        if not self.enabled:
+            return False
+        
+        if not self.webhook_url:
+            print("⚠️ 企业微信webhook地址未配置")
+            return False
+        
+        try:
+            # 1. 上传文件获取media_id
+            # 从webhook_url中提取key
+            # webhook_url格式: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxx
+            upload_url = self.webhook_url.replace('/send?', '/upload_media?') + '&type=file'
+            
+            # 准备文件上传参数
+            file_name = os.path.basename(file_path)
+            
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                print(f"❌ 文件不存在: {file_path}")
+                return False
+            
+            # 检查文件大小（企业微信限制：文件大小不超过20MB）
+            file_size = os.path.getsize(file_path)
+            if file_size > 20 * 1024 * 1024:  # 20MB
+                print(f"❌ 文件大小超过限制（20MB）: {file_size} bytes")
+                return False
+            
+            # 上传文件
+            with open(file_path, "rb") as f:
+                # 注意字段名必须是"media"
+                response = self.session.post(
+                    upload_url,
+                    files={"media": (file_name, f)},
+                    timeout=30
+                )
+            
+            upload_result = response.json()
+            if upload_result.get("errcode") != 0:
+                print(f"❌ 文件上传失败: {upload_result.get('errmsg')}")
+                return False
+            
+            media_id = upload_result.get("media_id")
+            if not media_id:
+                print("❌ 未获取到media_id")
+                return False
+            
+            print(f"✅ 文件上传成功，media_id: {media_id}")
+            
+            # 2. 使用media_id发送文件
+            payload = {
+                "msgtype": "file",
+                "file": {
+                    "media_id": media_id
+                }
+            }
+            
+            response = self.session.post(
+                self.webhook_url,
+                data=json.dumps(payload),
+                headers={"Content-Type": "application/json"},
+                timeout=10
+            )
+            
+            result = response.json()
+            if result.get("errcode") == 0:
+                print("✅ 企业微信文件发送成功")
+                return True
+            else:
+                print(f"❌ 企业微信文件发送失败: {result.get('errmsg')}")
+                return False
+                
+        except FileNotFoundError:
+            print(f"❌ 文件不存在: {file_path}")
+            return False
+        except Exception as e:
+            print(f"❌ 企业微信文件发送异常: {e}")
+            return False
+
     
     def send_new_topics_notification(self, new_topics: List[Dict], stats: Dict) -> bool:
         """
