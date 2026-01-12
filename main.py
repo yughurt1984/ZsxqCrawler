@@ -37,6 +37,7 @@ from accounts_sql_manager import get_accounts_sql_manager
 from account_info_db import get_account_info_db
 from zsxq_columns_database import ZSXQColumnsDatabase
 from logger_config import log_info, log_warning, log_error, log_exception, log_debug, ensure_configured
+from wecom_webhook import WeComWebhook  # ✅ 新增：导入企业微信Webhook类
 
 # 初始化日志系统
 ensure_configured()
@@ -999,6 +1000,28 @@ def run_file_download_task(task_id: str, group_id: str, max_files: Optional[int]
         path_manager = get_db_path_manager()
         db_path = path_manager.get_files_db_path(group_id)
 
+        # 获取wecom配置
+        config = load_config()
+        wecom_webhook_url = None
+        wecom_enabled = True
+        if config:
+            wecom_config = config.get('wecom_webhook', {})
+            if isinstance(wecom_config, dict):
+                wecom_webhook_url = wecom_config.get('webhook_url')
+                wecom_enabled = wecom_config.get('enabled', True)
+
+        # 创建wecom_webhook实例
+        wecom_webhook_instance = None
+        if wecom_webhook_url:
+            try:
+                path_manager = get_db_path_manager()
+                topics_db_path = path_manager.get_topics_db_path(group_id)
+                db = ZSXQDatabase(topics_db_path)
+                wecom_webhook_instance = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled, db=db, log_callback=log_callback)
+            except Exception as e:
+                add_task_log(task_id, f"⚠️ 创建wecom_webhook实例失败: {e}")
+
+        # 修改下载器创建代码，添加wecom_webhook参数
         downloader = ZSXQFileDownloader(
             cookie=cookie,
             group_id=group_id,
@@ -1009,7 +1032,9 @@ def run_file_download_task(task_id: str, group_id: str, max_files: Optional[int]
             download_interval_min=download_interval_min,
             download_interval_max=download_interval_max,
             long_sleep_interval_min=long_sleep_interval_min,
-            long_sleep_interval_max=long_sleep_interval_max
+            long_sleep_interval_max=long_sleep_interval_max,
+            wecom_webhook=wecom_webhook_instance,  # ✅ 新增
+            log_callback=log_callback  # ✅ 新增
         )
         # 设置日志回调和停止检查函数
         downloader.log_callback = log_callback
