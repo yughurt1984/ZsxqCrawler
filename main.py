@@ -1014,12 +1014,13 @@ def run_file_download_task(task_id: str, group_id: str, max_files: Optional[int]
         wecom_webhook_instance = None
         if wecom_webhook_url:
             try:
-                path_manager = get_db_path_manager()
-                topics_db_path = path_manager.get_topics_db_path(group_id)
-                db = ZSXQDatabase(topics_db_path)
-                wecom_webhook_instance = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled, db=db, log_callback=log_callback)
+                # ✅ 修复：只传递支持的参数
+                wecom_webhook_instance = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled)
+                add_task_log(task_id, "📱 企业微信Webhook已启用")
             except Exception as e:
                 add_task_log(task_id, f"⚠️ 创建wecom_webhook实例失败: {e}")
+        else:
+            add_task_log(task_id, "⚠️ 未配置企业微信Webhook URL")
 
         # 修改下载器创建代码，添加wecom_webhook参数
         downloader = ZSXQFileDownloader(
@@ -1033,8 +1034,8 @@ def run_file_download_task(task_id: str, group_id: str, max_files: Optional[int]
             download_interval_max=download_interval_max,
             long_sleep_interval_min=long_sleep_interval_min,
             long_sleep_interval_max=long_sleep_interval_max,
-            wecom_webhook=wecom_webhook_instance,  # ✅ 新增
-            log_callback=log_callback  # ✅ 新增
+            wecom_webhook=wecom_webhook_instance,
+            log_callback=log_callback
         )
         # 设置日志回调和停止检查函数
         downloader.log_callback = log_callback
