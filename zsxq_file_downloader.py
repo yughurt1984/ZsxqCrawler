@@ -26,7 +26,7 @@ class ZSXQFileDownloader:
                  download_interval: float = 1.0, long_sleep_interval: float = 60.0,
                  files_per_batch: int = 10, download_interval_min: float = None,
                  download_interval_max: float = None, long_sleep_interval_min: float = None,
-                 long_sleep_interval_max: float = None):
+                 long_sleep_interval_max: float = None, wecom_webhook=None, log_callback=None):
         """
         初始化文件下载器
 
@@ -112,13 +112,34 @@ class ZSXQFileDownloader:
         # 使用完整的文件数据库
         self.file_db = ZSXQFileDatabase(self.db_path)
         self.log(f"📊 完整文件数据库初始化完成: {self.db_path}")
+        
+        # 🆕 添加webhook和日志回调
+        self.wecom_webhook = wecom_webhook
+        self.log_callback = log_callback
 
     def log(self, message: str):
         """统一的日志输出方法"""
+        print(message)
         if self.log_callback:
             self.log_callback(message)
         else:
             print(message)
+
+    def format_file_size(self, size_bytes: int) -> str:
+        """格式化文件大小为人类可读格式
+        
+        Args:
+            size_bytes: 文件大小（字节）
+            
+        Returns:
+            格式化后的文件大小字符串，例如 "1.00 MB"
+        """
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.2f} TB"
+
 
     def set_stop_flag(self):
         """设置停止标志"""
@@ -616,6 +637,18 @@ class ZSXQFileDownloader:
 
                 self.log(f"   ✅ 下载完成: {safe_filename}")
                 self.log(f"   💾 保存路径: {file_path}")
+                
+                # 🆕 新增：下载成功后推送到企业微信
+                if self.wecom_webhook and os.path.exists(file_path):
+                    try:
+                        file_size_str = self.format_file_size(file_size)
+                        self.log(f"   📱 正在推送到企业微信...")
+                        if self.wecom_webhook.send_file(file_path):
+                            self.log(f"   ✅ 企业微信推送成功")
+                        else:
+                            self.log(f"   ⚠️ 企业微信推送失败")
+                    except Exception as e:
+                        self.log(f"   ❌ 企业微信推送异常: {e}")
 
                 self.download_count += 1
                 self.current_batch_count += 1
