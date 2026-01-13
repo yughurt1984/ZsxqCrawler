@@ -196,7 +196,12 @@ class ZSXQInteractiveCrawler:
             # 使用路径管理器获取文件数据库路径
             path_manager = get_db_path_manager()
             files_db_path = path_manager.get_files_db_path(self.group_id)
-            self.file_downloader = ZSXQFileDownloader(self.cookie, self.group_id, files_db_path)
+            self.file_downloader = ZSXQFileDownloader(self.cookie, self.group_id, files_db_path, wecom_webhook=self.wecom_webhook,log_callback=self.log)
+        
+        # 🆕 新增：传递webhook到文件下载器
+        if self.wecom_webhook:
+            self.file_downloader.wecom_webhook = self.wecom_webhook
+            self.log("📱 文件下载器已集成企业微信推送")
         return self.file_downloader
     
     def show_database_status(self):
