@@ -14,6 +14,10 @@ from zsxq_file_downloader import ZSXQFileDownloader
 from db_path_manager import get_db_path_manager
 import os
 import argparse
+import hashlib
+import pdfkit
+
+
 try:
     import tomllib
 except ImportError:
@@ -29,7 +33,7 @@ class ZSXQInteractiveCrawler:
     """知识星球交互式数据采集器"""
     def __init__(self, cookie: str, group_id: str, db_path: str = None, 
              log_callback=None, wecom_webhook_url: str = None, 
-             wecom_enabled: bool = True):
+             wecom_enabled: bool = True, pdf_config: dict = None):
         self.cookie = self.clean_cookie(cookie)
         self.group_id = group_id
         self.log_callback = log_callback  # 日志回调函数
@@ -53,7 +57,7 @@ class ZSXQInteractiveCrawler:
         if wecom_webhook_url:
             try:
                 from wecom_webhook import WeComWebhook
-                self.wecom_webhook = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled)
+                self.wecom_webhook = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled, log_callback=self.log)
                 self.log("📱 企业微信Webhook已启用")
             except ImportError:
                 self.log("⚠️ 未找到wecom_webhook模块，webhook推送功能不可用")
@@ -189,6 +193,152 @@ class ZSXQInteractiveCrawler:
         except Exception as e:
             print(f"Cookie清理失败: {e}")
             return cookie  # 返回原始值
+    
+    def convert_url_to_pdf(self, url: str, output_dir: str, title: Optional[str] = None) -> Optional[str]:
+        """使用wkhtmltopdf将网页URL转换为PDF文件
+    
+        Args:
+            url: 网页URL
+            output_dir: PDF输出目录
+            title: 可选的文章标题，用于生成PDF文件名
+            
+        Returns:
+            PDF文件路径，失败返回None
+        """
+        try:
+            self.log(f"   📄 开始转换网页为PDF: {url}")
+            
+            # 创建PDF输出目录
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # ✅ 生成PDF文件名（优先使用传入的标题）
+            if title and title.strip():
+                pdf_filename = f"{title}.pdf"
+            else:
+                # 如果没有标题，使用URL的hash
+                file_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+                pdf_filename = f"article_{file_hash}.pdf"
+            
+            pdf_path = os.path.join(output_dir, pdf_filename)
+            
+            # 如果PDF已存在，直接返回（避免重复转换）
+            if os.path.exists(pdf_path):
+                file_size = os.path.getsize(pdf_path)
+                self.log(f"   ✅ PDF已存在，跳过转换（{self.format_file_size(file_size)}）")
+                return pdf_path
+            
+            self.log(f"   📝 文章标题: {title}")
+            self.log(f"   📄 PDF文件名: {pdf_filename}")
+            
+            # wkhtmltopdf可执行文件路径
+            wkhtmltopdf_path = "D:/Program Files/wkhtmltox/bin/wkhtmltopdf.exe"
+            
+            # 创建pdfkit配置
+            config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_path)
+
+           # ✅ 水印配置（硬编码）
+            # enabled: 是否启用水印（true/false）
+            # text: 水印文本，支持[date]占位符（自动替换为当前日期）
+            # color: 水印颜色（RGBA格式）
+            # font_size: 字体大小（像素）
+            # rotation: 旋转角度（度数，-45表示逆时针45度）
+            watermark_enabled = True
+            watermark_text = "六便士出品"
+            watermark_color = "rgba(200, 200, 200, 0.3)"
+            watermark_font_size = 60
+            watermark_rotation = -45
+            
+            # 配置PDF选项
+            options = {
+                'encoding': 'UTF-8',
+                'quiet': '',  # 静默模式，减少输出
+                'margin-top': '0.75in',
+                'margin-right': '0.75in',
+                'margin-bottom': '0.75in',
+                'margin-left': '0.75in',
+                'page-size': 'A4',
+                'disable-smart-shrinking': '',  # 禁用智能缩放
+                'print-media-type': '',  # 使用打印媒体类型
+                'no-outline': '',  # 不创建大纲
+                'enable-local-file-access': '',  # 允许访问本地文件
+            }
+            
+            # 尝试直接从URL转换
+            try:
+                pdfkit.from_url(url, pdf_path, options=options, configuration=config)
+            except Exception as e:
+                self.log(f"   ⚠️ 直接转换失败: {e}")
+                self.log(f"   🔧 尝试通过HTML转换...")
+                
+                # 如果直接转换失败，先获取HTML再转换
+                headers = self.get_stealth_headers()
+                response = self.session.get(url, headers=headers, timeout=30)
+                
+                if response.status_code == 200:
+                    html_content = response.text
+                    
+                    # ✅ 添加水印到HTML（硬编码参数）
+                    if watermark_enabled:
+                        
+                        # 生成水印HTML
+                        watermark_html = f"""
+                        <div style="
+                            position: fixed;
+                            top: 50%;
+                            left: 50%;
+                            transform: translate(-50%, -50%) rotate({watermark_rotation}deg);
+                            font-size: {watermark_font_size}px;
+                            font-weight: bold;
+                            color: {watermark_color};
+                            pointer-events: none;
+                            z-index: 9999;
+                            white-space: nowrap;
+                            user-select: none;
+                            -webkit-user-select: none;
+                            -moz-user-select: none;
+                            -ms-user-select: none;
+                        ">
+                            {watermark_text}
+                        </div>
+                        """
+                        
+                        # 将水印插入到HTML的body中
+                        if '</body>' in html_content:
+                            html_content = html_content.replace('</body>', f'{watermark_html}</body>')
+                        else:
+                            # 如果没有body标签，添加在末尾
+                            html_content = watermark_html + html_content
+                    # 从HTML转换PDF
+                    pdfkit.from_string(html_content, pdf_path, options=options, configuration=config)
+                else:
+                    self.log(f"   ⚠️ 获取网页失败: HTTP {response.status_code}")
+                    return None
+                
+                
+            # 检查PDF文件是否生成
+            if os.path.exists(pdf_path):
+                file_size = os.path.getsize(pdf_path)
+                if file_size > 0:
+                    self.log(f"   ✅ PDF转换成功（{self.format_file_size(file_size)}）: {pdf_path}")
+                    return pdf_path
+                else:
+                    self.log(f"   ❌ PDF文件为空")
+                    os.remove(pdf_path)
+                    return None
+            else:
+                self.log(f"   ❌ PDF文件未生成")
+                return None
+        except Exception as e:
+            self.log(f"   ❌ PDF转换异常: {e}")
+            return None
+    
+    def format_file_size(self, size_bytes: int) -> str:
+        """格式化文件大小"""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.2f} TB"
     
     def get_file_downloader(self):
         """获取文件下载器（懒加载）"""
@@ -736,7 +886,7 @@ class ZSXQInteractiveCrawler:
             # 企业微信推送
             if self.wecom_webhook and new_topics:  # ✅ 使用new_topics列表判断
                 self.log(f"📱 准备推送企业微信通知，共{len(new_topics)}个新话题...")
-                success = self.wecom_webhook.send_new_topics_notification(new_topics, stats)
+                success = self.wecom_webhook.send_new_topics_notification(new_topics, stats, crawler=self)
                 if success:
                     self.log("✅ 企业微信推送成功")
                 else:
@@ -1351,7 +1501,22 @@ class ZSXQInteractiveCrawler:
                          # ✅ 添加：企业微信推送（在返回前）
                         if self.wecom_webhook and all_new_topics:
                             self.log(f"📱 准备推送企业微信通知，共{len(all_new_topics)}个新话题...")
-                            success = self.wecom_webhook.send_new_topics_notification(all_new_topics, total_stats)
+                            
+                            # ✅ 从数据库查询完整的topic信息（包含article字段）
+                            enhanced_new_topics = []
+                            for topic in all_new_topics:
+                                topic_id = topic.get('topic_id')
+                                if topic_id:
+                                    # 从数据库查询完整的topic详情
+                                    full_topic_detail = self.db.get_topic_detail(topic_id)
+                                    if full_topic_detail:
+                                        enhanced_new_topics.append(full_topic_detail)
+                                    else:
+                                        # 如果查询失败，使用原始数据
+                                        enhanced_new_topics.append(topic)
+                                        self.log(f"   ⚠️ 话题{topic_id}查询详情失败，使用原始数据")
+                            
+                            success = self.wecom_webhook.send_new_topics_notification(all_new_topics, total_stats, crawler=self)
                             if success:
                                 self.log("✅ 企业微信推送成功")
                             else:

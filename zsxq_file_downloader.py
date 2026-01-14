@@ -546,7 +546,7 @@ class ZSXQFileDownloader:
     def download_file(self, file_info: Dict[str, Any]) -> bool:
         """下载单个文件"""
         file_data = file_info.get('file', {})
-        file_id = file_data.get('id')
+        file_id = file_data.get('id') or file_data.get('file_id')
         file_name = file_data.get('name', 'Unknown')
         file_size = file_data.get('size', 0)
         download_count = file_data.get('download_count', 0)
@@ -637,25 +637,12 @@ class ZSXQFileDownloader:
 
                 self.log(f"   ✅ 下载完成: {safe_filename}")
                 self.log(f"   💾 保存路径: {file_path}")
-                
-                # 🆕 新增：下载成功后推送到企业微信
-                if self.wecom_webhook and os.path.exists(file_path):
-                    try:
-                        file_size_str = self.format_file_size(file_size)
-                        self.log(f"   📱 正在推送到企业微信...")
-                        if self.wecom_webhook.send_file(file_path):
-                            self.log(f"   ✅ 企业微信推送成功")
-                        else:
-                            self.log(f"   ⚠️ 企业微信推送失败")
-                    except Exception as e:
-                        self.log(f"   ❌ 企业微信推送异常: {e}")
 
                 self.download_count += 1
                 self.current_batch_count += 1
 
                 # 下载间隔控制
                 self._apply_download_intervals()
-
                 return True
             else:
                 self.log(f"   ❌ 下载失败: HTTP {response.status_code}")
