@@ -18,7 +18,8 @@ import hashlib
 from xhtml2pdf import pisa  # 新增
 from io import BytesIO      # 新增
 from reportlab.pdfbase.ttfonts import TTFont  # 新增：中文字体支持
-
+from reportlab.pdfbase import pdfmetrics     # 新增：中文字体支持
+from xhtml2pdf.default import DEFAULT_FONT   # 新增：设置默认字体
 import traceback
 from urllib.parse import urlparse
 import re
@@ -236,15 +237,13 @@ class ZSXQInteractiveCrawler:
             return html_content
 
     
-    
-    def convert_url_to_pdf(self, url: str, output_dir: str, title: Optional[str] = None, watermark_text: str = "六便士出品") -> Optional[str]:
+    def convert_url_to_pdf(self, url: str, output_dir: str, title: Optional[str] = None) -> Optional[str]:
         """使用wkhtmltopdf将网页URL转换为PDF文件
     
         Args:
             url: 网页URL
             output_dir: PDF输出目录
             title: 可选的文章标题，用于生成PDF文件名
-            watermark_text: 水印文字（如"机密文档"）
             
         Returns:
             PDF文件路径，失败返回None
@@ -304,6 +303,7 @@ class ZSXQInteractiveCrawler:
             else:
                 self.log(f"   🔗 外部链接域名: {domain}")
                 self.log(f"   🌐 使用Edge浏览器User-Agent")
+                self.log(f"   💡 提示：如果是付费内容，可能需要该网站的登录Cookie")
             
             response = self.session.get(url, headers=headers, timeout=30)
             
@@ -337,11 +337,12 @@ class ZSXQInteractiveCrawler:
                 
                 return tag
             
-            # 调整所有img标签
             html_content = re.sub(r'<img[^>]+>', add_responsive_style, html_content, flags=re.IGNORECASE)
-            self.log(f"   🖼️ 图片样式调整完成")
+            after_img_len = len(html_content)
+            self.log(f"   ✅ 图片处理完成，长度: {after_img_len} 字符（增加: {after_img_len - original_html_len}）")
             
-            # 清理HTML：移除多余的空段落和换行
+            # ✅ 清理重复内容：移除milkdown-preview块（它与ql-snow内容重复）
+            self.log(f"   🔧 清理重复内容...")
             original_len = len(html_content)
             
             # 方法1：移除整个milkdown-preview div及其内容
@@ -400,7 +401,6 @@ class ZSXQInteractiveCrawler:
                 html_content = re.sub(r'(<br>\s*){2,}', '<br>', html_content)
                 
                 self.log(f"   ✅ HTML结构清理完成")
-                
                 
                 # ✅ 注入CSS样式（使用xhtml2pdf内置的简体中文字体STSong-Light）
                 css = '''
