@@ -334,7 +334,7 @@ class WeComWebhook:
                 return False
                 
         except FileNotFoundError:
-            self.log(f"❌ {file_type_name}不存在: {file_path}")
+            self.log(f"❌ 文件不存在: {file_path}")
             return False
         except Exception as e:
             self.log(f"❌ 企业微信文件发送异常: {e}")
