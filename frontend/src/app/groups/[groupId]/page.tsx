@@ -47,7 +47,7 @@ export default function GroupDetailPage() {
   const [activeTab, setActiveTab] = useState('topics');
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
-  const [selectedCrawlOption, setSelectedCrawlOption] = useState<'latest' | 'incremental' | 'all' | 'range' | null>('all');
+  const [selectedCrawlOption, setSelectedCrawlOption] = useState<'scheduled' | 'latest' | 'incremental' | 'all' | 'range' | null>('all');
   const [selectedDownloadOption, setSelectedDownloadOption] = useState<'time' | 'count' | null>('time');
   // 注意：topic_id 可能超过 JS 安全整数范围，这里统一按字符串处理 ID
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
@@ -146,11 +146,16 @@ export default function GroupDetailPage() {
   const [crawlIntervalMax, setCrawlIntervalMax] = useState<number>(5);
   const [crawlLongSleepIntervalMin, setCrawlLongSleepIntervalMin] = useState<number>(180);
   const [crawlLongSleepIntervalMax, setCrawlLongSleepIntervalMax] = useState<number>(300);
-// 时间区间采集（最近N天 或 自定义日期）
-const [quickLastDays, setQuickLastDays] = useState<number>(30);
-const [rangeStartDate, setRangeStartDate] = useState<string>('');
-const [rangeEndDate, setRangeEndDate] = useState<string>('');
-const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
+  // 时间区间采集（最近N天 或 自定义日期）
+  const [quickLastDays, setQuickLastDays] = useState<number>(30);
+  const [rangeStartDate, setRangeStartDate] = useState<string>('');
+  const [rangeEndDate, setRangeEndDate] = useState<string>('');
+  const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
+  
+  // 定时获取相关状态
+  const [scheduledRunning, setScheduledRunning] = useState<boolean>(false);
+  const [scheduleIntervalMinutes, setScheduleIntervalMinutes] = useState<number>(5); // 默认 5 分钟
+  const [scheduledDialogOpen, setScheduledDialogOpen] = useState<boolean>(false); // 定时获取弹窗状态
 
   // 单个话题采集状态
   const [singleTopicId, setSingleTopicId] = useState<string>('');
@@ -170,6 +175,29 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
     loadGroupAccountSelf();
     loadColumnsSummary();
   }, [groupId]);
+
+  // 检查定时任务状态的函数
+  const checkScheduledStatus = useCallback(async () => {
+    try {
+      // 调用API获取定时任务状态
+      const status: any = await apiClient.getScheduledCrawlStatus(groupId);
+      
+      // 更新定时任务运行状态
+      // status.running 如果为 true，说明定时任务正在运行
+      setScheduledRunning(Boolean(status && status.running));
+      
+      console.log('[定时任务状态] 群组', groupId, '定时任务状态:', status);
+    } catch (e) {
+      console.error('获取定时任务状态失败:', e);
+      // 如果API调用失败，默认设为未运行
+      setScheduledRunning(false);
+    }
+  }, [groupId]);
+
+  // 检查定时任务状态
+  useEffect(() => {
+    checkScheduledStatus();
+  }, [checkScheduledStatus]);
 
   useEffect(() => {
     loadTopics();
@@ -519,34 +547,72 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
     }
   };
 
-  const handleIncrementalCrawl = async () => {
+  // 在 handleIncrementalCrawl 函数之后添加（约第560行）：
+  
+    const handleIncrementalCrawl = async () => {
     try {
       setCrawlLoading('incremental');
 
       // 构建爬取设置参数
-      const crawlSettings = {
-        crawlIntervalMin,
-        crawlIntervalMax,
-        longSleepIntervalMin: crawlLongSleepIntervalMin,
-        longSleepIntervalMax: crawlLongSleepIntervalMax,
-        pagesPerBatch: Math.max(crawlPagesPerBatch, 5)
-      };
+    const crawlSettings = {
+      crawlIntervalMin,
+      crawlIntervalMax,
+      longSleepIntervalMin: crawlLongSleepIntervalMin,
+      longSleepIntervalMax: crawlLongSleepIntervalMax,
+      pagesPerBatch: Math.max(crawlPagesPerBatch, 5)
+    };
 
-      const response = await apiClient.crawlIncremental(groupId, 10, 20, crawlSettings);
-      toast.success(`增量爬取任务已创建: ${(response as any).task_id}`);
+    const response = await apiClient.crawlIncremental(groupId, 10, 20, crawlSettings);
+    toast.success(`增量爬取任务已创建: ${(response as any).task_id}`);
 
-      // 设置当前任务ID以显示日志
-      setCurrentTaskId((response as any).task_id);
-      // 自动切换到日志标签页
-      setActiveTab('logs');
+    // 设置当前任务ID以显示日志
+    setCurrentTaskId((response as any).task_id);
+    // 自动切换到日志标签页
+    setActiveTab('logs');
 
-      setTimeout(() => {
-        loadGroupStats();
-        loadTopics();
-        loadRecentTasks();
-      }, 2000);
-    } catch (error) {
-      toast.error(`增量爬取失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    setTimeout(() => {
+      loadGroupStats();
+      loadTopics();
+      loadRecentTasks();
+    }, 2000);
+  } catch (error) {
+    toast.error(`增量爬取失败: ${error instanceof Error ? error.message : '未知错误'}`);
+  } finally {
+    setCrawlLoading(null);
+  }
+};    
+      
+  const handleScheduledCrawl = async () => {
+    try {
+      setCrawlLoading('scheduled');
+      
+      if (!scheduledRunning) {
+        // 启动定时任务
+        const settings = {
+          intervalMinutes: scheduleIntervalMinutes,
+          crawlIntervalMin,
+          crawlIntervalMax,
+          longSleepIntervalMin: crawlLongSleepIntervalMin,
+          longSleepIntervalMax: crawlLongSleepIntervalMax,
+          pagesPerBatch: Math.max(crawlPagesPerBatch, 5)
+        };
+        
+        const response = await apiClient.startScheduledCrawl(groupId, settings);
+        toast.success(`定时任务已启动: ${(response as any).task_id || '成功'}`);
+        setScheduledRunning(true);
+        
+        // 设置当前任务ID以显示日志
+        setCurrentTaskId((response as any).task_id);
+        // 自动切换到日志标签页
+        setActiveTab('logs');
+      } else {
+        // 停止定时任务
+        await apiClient.stopScheduledCrawl(groupId);
+        toast.success('定时任务已停止');
+        setScheduledRunning(false);
+      }
+    } catch (err) {
+      toast.error(`操作失败: ${err instanceof Error ? err.message : '未知错误'}`);
     } finally {
       setCrawlLoading(null);
     }
@@ -2270,6 +2336,135 @@ const [latestDialogOpen, setLatestDialogOpen] = useState<boolean>(false);
                             {fetchingSingle ? '执行中...' : '采集'}
                           </Button>
                         </div>
+                      </div>
+
+                      {/* 定时获取 */}
+                      <div
+                        className={`border rounded-lg p-3 cursor-pointer transition-all ${selectedCrawlOption === 'scheduled'
+                            ? 'bg-yellow-50 border-yellow-200'
+                            : 'border-gray-200 hover:bg-gray-50'
+                          }`}
+                        onClick={() => setSelectedCrawlOption('scheduled')}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <Clock className={`h-3 w-3 ${selectedCrawlOption === 'scheduled' ? 'text-yellow-600' : 'text-gray-400'}`} />
+                            <span className={`text-xs font-medium ${selectedCrawlOption === 'scheduled' ? 'text-yellow-700' : 'text-gray-600'}`}>
+                              定时获取
+                            </span>
+                          </div>
+                          {scheduledRunning && (
+                            <Badge variant="secondary" className="text-xs px-1 py-0 bg-green-100 text-green-700">
+                              运行中
+                            </Badge>
+                          )}
+                        </div>
+
+                                                {selectedCrawlOption === 'scheduled' && (
+                          <div>
+                            {scheduledRunning ? (
+                              // 运行中状态：显示停止按钮
+                              <Button
+                                size="sm"
+                                className="w-full h-7 text-xs bg-red-600 hover:bg-red-700"
+                                onClick={handleScheduledCrawl}
+                                disabled={!!crawlLoading}
+                              >
+                                {crawlLoading === 'scheduled' ? '处理中...' : '停止定时任务'}
+                              </Button>
+                            ) : (
+                              // 未运行状态：显示开始按钮，点击打开弹窗
+                              <AlertDialog open={scheduledDialogOpen} onOpenChange={setScheduledDialogOpen}>
+                                <Button
+                                  size="sm"
+                                  className="w-full h-7 text-xs bg-yellow-600 hover:bg-yellow-700"
+                                  disabled={!!crawlLoading}
+                                  onClick={() => setScheduledDialogOpen(true)}
+                                >
+                                  {crawlLoading === 'scheduled' ? '处理中...' : '开始'}
+                                </Button>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>配置定时获取</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      选择获取间隔时间，系统将自动按间隔获取最新话题并推送。
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <div className="space-y-3">
+                                    <div className="text-xs text-gray-600">选择时间间隔</div>
+                                    <div className="flex items-center gap-2">
+                                      <Button
+                                        size="sm"
+                                        variant={scheduleIntervalMinutes === 5 ? "default" : "outline"}
+                                        className={`h-7 text-xs ${scheduleIntervalMinutes === 5 ? "bg-yellow-600 hover:bg-yellow-700" : ""}`}
+                                        onClick={(e) => { e.stopPropagation(); setScheduleIntervalMinutes(5); }}
+                                      >
+                                        5 分钟
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant={scheduleIntervalMinutes === 15 ? "default" : "outline"}
+                                        className={`h-7 text-xs ${scheduleIntervalMinutes === 15 ? "bg-yellow-600 hover:bg-yellow-700" : ""}`}
+                                        onClick={(e) => { e.stopPropagation(); setScheduleIntervalMinutes(15); }}
+                                      >
+                                        15 分钟
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant={scheduleIntervalMinutes === 30 ? "default" : "outline"}
+                                        className={`h-7 text-xs ${scheduleIntervalMinutes === 30 ? "bg-yellow-600 hover:bg-yellow-700" : ""}`}
+                                        onClick={(e) => { e.stopPropagation(); setScheduleIntervalMinutes(30); }}
+                                      >
+                                        30 分钟
+                                      </Button>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Button
+                                        size="sm"
+                                        variant={scheduleIntervalMinutes === 60 ? "default" : "outline"}
+                                        className={`h-7 text-xs ${scheduleIntervalMinutes === 60 ? "bg-yellow-600 hover:bg-yellow-700" : ""}`}
+                                        onClick={(e) => { e.stopPropagation(); setScheduleIntervalMinutes(60); }}
+                                      >
+                                        1 小时
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant={scheduleIntervalMinutes === 120 ? "default" : "outline"}
+                                        className={`h-7 text-xs ${scheduleIntervalMinutes === 120 ? "bg-yellow-600 hover:bg-yellow-700" : ""}`}
+                                        onClick={(e) => { e.stopPropagation(); setScheduleIntervalMinutes(120); }}
+                                      >
+                                        2 小时
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant={scheduleIntervalMinutes === 240 ? "default" : "outline"}
+                                        className={`h-7 text-xs ${scheduleIntervalMinutes === 240 ? "bg-yellow-600 hover:bg-yellow-700" : ""}`}
+                                        onClick={(e) => { e.stopPropagation(); setScheduleIntervalMinutes(240); }}
+                                      >
+                                        4 小时
+                                      </Button>
+                                    </div>
+                                  </div>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel onClick={(e) => { e.stopPropagation(); setScheduledDialogOpen(false); }}>
+                                      取消
+                                    </AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={handleScheduledCrawl}
+                                      className="bg-yellow-600 hover:bg-yellow-700 focus:ring-yellow-600"
+                                    >
+                                      开始定时获取
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            )}
+                            <div className="text-[10px] text-gray-400 mt-2">
+                              自动按间隔获取最新话题并推送
+                            </div>
+                          </div>
+                        )}
+
                       </div>
 
                       {/* 全量爬取 */}
