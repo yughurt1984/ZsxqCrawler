@@ -21,7 +21,7 @@ import mimetypes
 import random
 import time
 from datetime import timedelta
-import asyncio
+
 
 # 添加项目根目录到Python路径（现在main.py就在根目录）
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -1574,8 +1574,12 @@ async def start_scheduled_crawl(group_id: str, request: ScheduledCrawlRequest, b
                     
                     # 更新下次运行时间
                     if not stop_check():
+                        # 计算随机等待时间：随机区间为（t-1, t）分钟
+                        random_wait = random.uniform(request.intervalMinutes - 1, request.intervalMinutes)
+                        wait_minutes = int(random_wait)
+                        
                         # 计算下一次运行时间
-                        next_run_time = datetime.now() + timedelta(minutes=request.intervalMinutes)
+                        next_run_time = datetime.now() + timedelta(minutes=wait_minutes)
                         next_run_str = next_run_time.strftime('%H:%M:%S')
                         
                         # 输出等待提示
@@ -3267,6 +3271,7 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
                 LEFT JOIN talks tk ON t.topic_id = tk.topic_id
                 LEFT JOIN users u ON tk.owner_user_id = u.user_id
                 WHERE t.group_id = ? AND (t.title LIKE ? OR q.text LIKE ? OR tk.text LIKE ?)
+                GROUP BY t.topic_id  -- ✅ 添加去重
                 ORDER BY t.create_time DESC
                 LIMIT ? OFFSET ?
             """
@@ -3286,6 +3291,7 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
                 LEFT JOIN talks tk ON t.topic_id = tk.topic_id
                 LEFT JOIN users u ON tk.owner_user_id = u.user_id
                 WHERE t.group_id = ?
+                GROUP BY t.topic_id  -- ✅ 添加去重
                 ORDER BY t.create_time DESC
                 LIMIT ? OFFSET ?
             """
@@ -3998,6 +4004,31 @@ def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRa
                         last_time_dt_in_page = dt  # 该页数据按时间降序；循环结束后持有最后（最老）时间
                         if start_dt <= dt <= end_dt:
                             filtered.append(t)
+                            
+                # ✅ 添加调试日志
+                if topics:
+                    first_topic_time = topics[0].get('create_time')
+                    last_topic_time = topics[-1].get('create_time')
+                    add_task_log(task_id, f"📄 本页时间范围: {first_topic_time} ~ {last_topic_time}")
+                    add_task_log(task_id, f"🔍 时间过滤结果: 本页{len(topics)}条, 过滤后{len(filtered)}条")
+                    
+                    if filtered:
+                        filtered_first = filtered[0].get('create_time')
+                        filtered_last = filtered[-1].get('create_time')
+                        add_task_log(task_id, f"✅ 过滤后范围: {filtered_first} ~ {filtered_last}")
+                    else:
+                        # 判断为什么过滤为空
+                        try:
+                            last_time_str = topics[-1].get('create_time')
+                            if last_time_str:
+                                last_time_fixed = last_time_str.replace('+0800', '+08:00') if last_time_str.endswith('+0800') else last_time_str
+                                last_dt = datetime.fromisoformat(last_time_fixed)
+                                if last_dt < start_dt:
+                                    add_task_log(task_id, f"⚠️ 过滤为空原因: 本页最老时间({last_dt.strftime('%Y-%m-%d %H:%M')})早于开始时间({start_dt.strftime('%Y-%m-%d %H:%M')})")
+                                else:
+                                    add_task_log(task_id, f"⚠️ 过滤为空原因: 本页数据晚于结束时间，继续爬取更早数据")
+                        except Exception as e:
+                            add_task_log(task_id, f"⚠️ 时间解析异常: {e}")
 
                 # 仅导入时间范围内的数据
                 if filtered:
@@ -4007,22 +4038,39 @@ def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRa
                     total_stats['updated_topics'] += page_stats.get('updated_topics', 0)
                     total_stats['errors'] += page_stats.get('errors', 0)
 
+                    # 计算下一页的 end_time（使用该页最老话题时间 - 偏移毫秒）
+                    oldest_in_page = filtered[-1].get('create_time')  # ✅ 使用过滤后列表
+                    try:
+                        dt_oldest = datetime.fromisoformat(oldest_in_page.replace('+0800', '+08:00'))
+                        dt_oldest = dt_oldest - timedelta(milliseconds=crawler.timestamp_offset_ms)
+                        end_time_param = dt_oldest.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
+                    except Exception:
+                        end_time_param = oldest_in_page
+                else:
+                    # 如果没有过滤后的数据，需要判断原因
+                    # 情况1: 所有数据都早于开始时间 → 结束爬取
+                    # 情况2: 所有数据都晚于结束时间 → 继续爬取更早数据
+                    oldest_in_page = topics[-1].get('create_time')
+                    try:
+                        dt_oldest = datetime.fromisoformat(oldest_in_page.replace('+0800', '+08:00'))
+                        last_time_dt_in_page = dt_oldest
+                        
+                        # ✅ 判断：如果最老时间早于开始时间，结束；否则继续爬取
+                        if dt_oldest < start_dt:
+                            add_task_log(task_id, f"🛑 已到达起始时间之前，任务结束")
+                            break
+                        else:
+                            # 数据晚于结束时间，继续爬取更早数据
+                            dt_oldest = dt_oldest - timedelta(milliseconds=crawler.timestamp_offset_ms)
+                            end_time_param = dt_oldest.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
+                            add_task_log(task_id, f"⏭️ 使用本页最老时间继续: {end_time_param}")
+                    except Exception:
+                        last_time_dt_in_page = None
+
+
                 total_stats['pages'] += 1
                 page_processed = True
-
-                # 计算下一页的 end_time（使用该页最老话题时间 - 偏移毫秒）
-                oldest_in_page = topics[-1].get('create_time')
-                try:
-                    dt_oldest = datetime.fromisoformat(oldest_in_page.replace('+0800', '+08:00'))
-                    dt_oldest = dt_oldest - timedelta(milliseconds=crawler.timestamp_offset_ms)
-                    end_time_param = dt_oldest.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                except Exception:
-                    end_time_param = oldest_in_page
-
-                # 若该页最老时间已早于 start_dt，则后续更老数据均不在范围内，结束
-                if last_time_dt_in_page and last_time_dt_in_page < start_dt:
-                    add_task_log(task_id, "✅ 已到达起始时间之前，任务结束")
-                    break
+                
 
                 # 成功处理后进行长休眠检查
                 crawler.check_page_long_delay()
