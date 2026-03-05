@@ -15,7 +15,9 @@ from zsxq_interactive_crawler import load_config
 from PyPDF2 import PdfReader, PdfWriter
 import traceback
 import hashlib
-
+from PIL import Image, ImageDraw, ImageFont  # ✅ 添加PIL导入
+import textwrap  # ✅ 添加文本换行支持
+import random
 
 class HTMLTagRemover(HTMLParser):
     """HTML标签清理器"""
@@ -394,13 +396,48 @@ class WeComWebhook:
                 # ========== 4. 分支3: 内容中有图片 → 下载图片，推送文本和图片 ==========
                 content_images = self._extract_images(talk)
                 if content_images and crawler:
-                    # 先推送文本
-                    text_success = self._handle_text_message(i, title, content, author_name, create_time, len(new_topics))
-                    # 再推送图片
-                    image_success = self._handle_images(i, content_images, title, crawler, len(new_topics))
-                    # 只要有一个成功就算成功
-                    if text_success or image_success:
-                        success_count += 1
+                    self.log(f"🖼️ 第{i}/{len(new_topics)}条：检测到图片和文字，准备合并推送...")
+                    
+                    # 获取下载目录
+                    pdf_output_dir = self._get_pdf_output_dir(crawler)
+                    
+                    # 下载所有图片
+                    downloaded_images = []
+                    for img_url in content_images:
+                        img_path = self._download_image(img_url, pdf_output_dir)
+                        if img_path:
+                            downloaded_images.append(img_path)
+                    
+                    # 合并文本和图片为一张图片
+                    if downloaded_images:
+                        merged_image_path = self._text_and_images_to_image(
+                            title=title,
+                            content=content,
+                            author_name=author_name,
+                            create_time=create_time,
+                            image_paths=downloaded_images,
+                            index=i,
+                            total=len(new_topics)
+                        )
+                        
+                        if merged_image_path and self.send_image(merged_image_path):
+                            self.log(f"✅ 第{i}/{len(new_topics)}条推送成功（合并图片）")
+                            # 清理临时图片
+                            for img_path in downloaded_images:
+                                try:
+                                    os.remove(img_path)
+                                except:
+                                    pass
+                            try:
+                                os.remove(merged_image_path)
+                            except:
+                                pass
+                            success_count += 1
+                        else:
+                            self.log(f"❌ 第{i}/{len(new_topics)}条推送失败")
+                    else:
+                        self.log(f"❌ 第{i}/{len(new_topics)}条：所有图片下载失败")
+                    
                     continue  # 已处理，跳过后续分支
                 
                  # ========== 5. 分支4: 纯文本推送 ==========
@@ -655,6 +692,325 @@ class WeComWebhook:
             self.log(f"   ❌ 图片下载异常: {e}")
             return None
 
+    def _text_and_images_to_image(self, title: str, content: str, author_name: str, 
+                                 create_time: str, image_paths: List[str], 
+                                 index: int, total: int) -> Optional[str]:
+        """
+        将文本内容和图片合并成一张图片
+        
+        Args:
+            title: 标题
+            content: 内容
+            author_name: 作者名
+            create_time: 创建时间
+            image_paths: 图片路径列表
+            index: 当前索引
+            total: 总数
+            
+        Returns:
+            图片文件路径，失败返回None
+        """
+        try:
+            # 清理HTML标签
+            title = clean_html_tags(title)
+            content = clean_html_tags(content)
+            
+            # 创建图片（白色背景）
+            img_width = 750  # 减小图片宽度
+            # 根据内容动态计算高度，先创建一个临时图片用于计算
+            background_color = (255, 255, 255)  # 白色
+            temp_image = Image.new('RGB', (img_width, 100), background_color)
+            temp_draw = ImageDraw.Draw(temp_image)
+        
+            
+            # 尝试加载字体
+            font_paths = [
+            "C:\\Windows\\Fonts\\simhei.ttf",  # 黑体：更清晰锐利
+            "C:\\Windows\\Fonts\\msyh.ttc",
+            "C:\\Windows\\Fonts\\simsun.ttc",
+                None
+            ]
+            
+            font_title = None
+            font_text = None
+            font_info = None
+            
+            for font_path in font_paths:
+                try:
+                    if font_path:
+                        font_title = ImageFont.truetype(font_path, 40)
+                        font_text = ImageFont.truetype(font_path, 30)
+                        font_info = ImageFont.truetype(font_path, 20)
+                        break
+                except:
+                    continue
+            
+            if font_title is None:
+                font_title = ImageFont.load_default()
+                font_text = ImageFont.load_default()
+                font_info = ImageFont.load_default()
+            
+            # 先计算文字内容的实际行数
+            max_content_width = img_width - 50  # 减小边距，增大内容宽度
+            content_lines = []
+            
+            paragraphs = content.split('\n')
+            for para in paragraphs:
+                if para.strip():
+                    current_line = ""
+                    for char in para:
+                        test_line = current_line + char
+                        bbox = temp_draw.textbbox((0, 0), test_line, font=font_text)
+                        line_width = bbox[2] - bbox[0]
+                        
+                        if line_width <= max_content_width:
+                            current_line = test_line
+                        else:
+                            if current_line:
+                                content_lines.append(current_line)
+                            current_line = char
+                    
+                    if current_line:
+                        content_lines.append(current_line)
+                else:
+                    content_lines.append("")
+            
+            # 动态计算图片高度
+            # 固定部分高度：顶部横线(3)+间距(15)+标题(45)+副标题(40)+分隔线(2)+间距(20)+
+            # 作者(20)+时间(20)+间距(25)+分割线(1)+间距(15)+内容标签(20)+间距(20)
+            fixed_height = 236
+            # 内容部分高度（增大行间距到28）
+            content_height = len(content_lines) * 40 # 每行28像素
+            # 图片部分高度（每行2张，固定尺寸）
+            fixed_img_w = (img_width - 50) // 2 - 10  # 每张图片宽度，减去左右边距和间距
+            fixed_img_h = 180  # 固定图片高度
+            
+            if image_paths:
+                # 计算图片行数：每行2张
+                num_images = len(image_paths)
+                image_rows = (num_images + 1) // 2  # 向上取整
+                # 分割线(1)+间距(15)+标签(30)+间距(15)+图片行数×(高度+间距)
+                image_height = 1 + 15 + 30 + 15 + image_rows * (fixed_img_h + 15)
+            else:
+                image_height = 0
+            # 底部信息高度：间距(15)+分割线(1)+间距(20)+底部文字(30)
+            footer_height = 66
+            
+            # 总高度
+            img_height = fixed_height + content_height + image_height + footer_height
+            # 确保最小高度
+            img_height = max(img_height, 800)
+            
+            # 创建实际图片
+            image = Image.new('RGB', (img_width, img_height), background_color)
+            draw = ImageDraw.Draw(image)
+        
+            # 颜色定义
+            title_color = (0, 0, 0)
+            text_color = (70, 70, 70)
+            info_color = (100, 100, 100)
+            border_color = (200, 200, 200)
+            
+            # 当前Y坐标
+            y = 40
+            
+            # 绘制顶部横线
+            draw.rectangle([20, y, img_width - 20, y + 3], fill=border_color)
+            y += 15
+            
+            # 绘制标题
+            title_text = "大佳新内容推送"
+            bbox = draw.textbbox((0, 0), title_text, font=font_title)
+            title_width = bbox[2] - bbox[0]
+            draw.text(((img_width - title_width) // 2, y), title_text, 
+                    fill=title_color, font=font_title)
+            y += 50
+            
+            # 绘制分隔线
+            draw.line([25, y, img_width - 40, y], fill=border_color, width=2)
+            y += 25
+            
+            # 绘制作者和时间
+            draw.text((25, y), f" 作者: {author_name}", 
+                    fill=info_color, font=font_info)
+            y += 25
+            draw.text((25, y), f" 时间: {create_time}", 
+                    fill=info_color, font=font_info)
+            y += 30
+            
+            # 在时间和内容之间添加分割线
+            draw.line([25, y, img_width - 40, y], fill=border_color, width=1)
+            y += 20
+            
+            # 绘制内容标签
+            draw.text((25, y), " 内容:", fill=info_color, font=font_info)
+            y += 25
+            
+            # 绘制所有内容（不限制行数），增大行间距
+            for line in content_lines:
+                if line:
+                    draw.text((25, y), line, fill=text_color, font=font_text, stroke_width=1, stroke_fill=(240, 240, 240))
+                y += 40  # 增大行间距从22到40
+                        
+            
+            # 绘制图片（网格布局，每行2张）
+            if image_paths:
+                y += 20
+                draw.line([25, y, img_width - 25, y], fill=border_color, width=1)
+                y += 15
+                draw.text((25, y), f" 图片 ({len(image_paths)}张):", fill=info_color, font=font_info)
+                y += 30
+                
+            # 固定图片尺寸
+            fixed_img_w = (img_width - 50) // 2 - 10  # 每张图片宽度，减去边距和间距
+            fixed_img_h = 180  # 固定图片高度
+            
+            # 网格布局：每行2张图片
+            left_margin = 25
+            col_width = fixed_img_w + 10  # 图片宽度 + 间距
+            
+            # 记录图片区域的起始Y坐标
+            image_start_y = y
+            
+            for i, img_path in enumerate(image_paths):
+                try:
+                    img = Image.open(img_path)
+                    # 固定图片尺寸，使用缩放模式（contain模式：完整显示）
+                    img_w, img_h = img.size
+                    
+                    # 计算缩放比例（contain模式：完整显示图片）
+                    ratio_w = fixed_img_w / img_w
+                    ratio_h = fixed_img_h / img_h
+                    ratio = min(ratio_w, ratio_h)  # 使用较小的比例，确保完整显示
+                    
+                    # 缩放到固定尺寸内
+                    new_w = int(img_w * ratio)
+                    new_h = int(img_h * ratio)
+                    img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    
+                    # 计算位置（每行2张）
+                    row = i // 2
+                    col = i % 2
+                    
+                    # 计算该行的Y坐标
+                    if row == 0:
+                        current_y = image_start_y
+                    else:
+                        current_y = image_start_y + row * (fixed_img_h + 15)
+                    
+                    x = left_margin + col * col_width
+                    
+                    # 计算居中偏移（使图片在固定区域内居中）
+                    offset_x = (fixed_img_w - new_w) // 2
+                    offset_y = (fixed_img_h - new_h) // 2
+                    
+                    # 绘制图片边框（固定尺寸）
+                    draw.rectangle([x, current_y, x + fixed_img_w, current_y + fixed_img_h], 
+                              fill=border_color, width=1)
+                    
+                    # 绘制图片（居中放置在固定区域内）
+                    image.paste(img_resized, (x + offset_x, current_y + offset_y))
+                    
+                    self.log(f"   ✅ 已嵌入图片{i+1}/{len(image_paths)} (原始:{img_w}x{img_h} -> 缩放:{new_w}x{new_h})")
+                except Exception as e:
+                    self.log(f"   ❌ 嵌入图片{i+1}失败: {e}")
+
+                
+                # 更新Y坐标到图片区域的底部
+                num_images = len(image_paths)
+                image_rows = (num_images + 1) // 2
+                y += fixed_img_h + 15  # 移动到最后一行图片的底部
+            
+            else:
+                # 没有图片时，记录当前y位置
+                last_image_y = y
+            
+            # 添加旋转45度水印"六便士出品"（在最后一张图片位置，最上层）
+            try:
+                watermark_text = "六便士出品，欢迎联系作者微信：yughurt1984"
+                watermark_font_size = 32
+                
+                # 尝试加载字体
+                try:
+                    watermark_font = ImageFont.truetype("C:\\Windows\\Fonts\\msyh.ttc", watermark_font_size)
+                except:
+                    watermark_font = ImageFont.load_default()
+                
+                # 计算水印文字的尺寸
+                temp_draw = ImageDraw.Draw(image)
+                watermark_bbox = temp_draw.textbbox((0, 0), watermark_text, font=watermark_font)
+                watermark_w = watermark_bbox[2] - watermark_bbox[0]
+                watermark_h = watermark_bbox[3] - watermark_bbox[1]
+                
+                # 创建一个足够大的临时图片来容纳旋转后的水印
+                diagonal = int((watermark_w ** 2 + watermark_h ** 2) ** 0.5) + 40
+                watermark_img = Image.new('RGBA', (diagonal, diagonal), (255, 255, 255, 0))
+                watermark_draw = ImageDraw.Draw(watermark_img)
+                
+                # 在临时图片中心绘制水印文字（调淡颜色）
+                watermark_color = (180, 180, 180, 150)  # 浅灰色，透明度150
+                text_x = (diagonal - watermark_w) // 2
+                text_y = (diagonal - watermark_h) // 2
+                watermark_draw.text((text_x, text_y), watermark_text, 
+                                 fill=watermark_color, font=watermark_font)
+                
+                # 旋转45度
+                watermark_img = watermark_img.rotate(45, expand=False)
+                
+                # 计算水印位置：在最后一张图片起始位置的斜45°方向
+                # 水印位置以最后一张图片的起始位置为基准
+                watermark_base_x = img_width // 2  # 水平居中
+                watermark_base_y = last_image_y if last_image_y else y  # 最后一张图片的Y坐标
+                
+                # 水印位于基准位置的斜45°上方
+                # 向右下45°方向偏移
+                offset_x = 10   # 水平偏移（向右）
+                offset_y = -200  # 垂直偏移（向上，负值表示向上）
+                watermark_x = watermark_base_x - diagonal // 2 + offset_x
+                watermark_y = watermark_base_y - diagonal // 2 + offset_y
+                
+                # 将水印粘贴到主图片上（最上层）
+                image.paste(watermark_img, (watermark_x, watermark_y), watermark_img)
+                
+                self.log(f"   ✅ 已添加水印: {watermark_text} 位置({watermark_x}, {watermark_y})")
+            except Exception as e:
+                self.log(f"   ⚠️ 添加水印失败: {e}")
+                import traceback
+                self.log(f"   详细错误: {traceback.format_exc()}")    
+            
+            # 绘制底部信息
+            y += 15
+            draw.line([25, y, img_width - 40, y], fill=border_color, width=1)
+            y += 20
+            
+            footer_text = "🤖 本内容由六便士整理推送"
+            footer_bbox = draw.textbbox((0, 0), footer_text, font=font_info)
+            footer_width = footer_bbox[2] - footer_bbox[0]
+            draw.text(((img_width - footer_width) // 2, y), footer_text, 
+                    fill=info_color, font=font_info)
+            
+            # 保存图片
+            temp_dir = os.path.join(os.path.dirname(__file__), "temp_images")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            import time
+            timestamp = int(time.time() * 1000)
+            image_filename = f"text_with_images_{timestamp}.png"
+            image_path = os.path.join(temp_dir, image_filename)
+
+            image.save(image_path, 'PNG', quality=95,dpi=(600, 600))
+            
+            self.log(f"   ✅ 文本和图片已合并: {image_path}")
+            return image_path
+            
+        except Exception as e:
+            self.log(f"   ❌ 文本和图片合并失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+
+    
     def _handle_images(self, index: int, image_urls: List[str], title: str, 
                    crawler, total: int) -> bool:
         """
@@ -789,36 +1145,262 @@ class WeComWebhook:
         except Exception as e:
             self.log(f"   ❌ 图片发送异常: {e}")
             return False
- 
+    
+    def _text_to_image(self, title: str, content: str, author_name: str, 
+                   create_time: str, index: int, total: int) -> Optional[str]:
+        """
+        将文本内容转换为图片
+        
+        Args:
+            title: 标题
+            content: 内容
+            author_name: 作者名
+            create_time: 创建时间
+            index: 当前索引
+            total: 总数
+            
+        Returns:
+            图片文件路径，失败返回None
+        """
+        try:
+            # 创建图片（白色背景）
+            img_width = 800
+            img_height = 1000
+            background_color = (255, 255, 255)  # 白色
+            image = Image.new('RGB', (img_width, img_height), background_color)
+            draw = ImageDraw.Draw(image)
+            
+            # 尝试加载字体，优先使用中文字体
+            font_paths = [
+            "C:\\Windows\\Fonts\\simhei.ttf",  # 黑体：更清晰锐利
+            "C:\\Windows\\Fonts\\msyh.ttc",
+            "C:\\Windows\\Fonts\\simsun.ttc",
+                None  # 使用默认字体
+            ]
+            
+            font_title = None
+            font_text = None
+            font_info = None
+            
+            for font_path in font_paths:
+                try:
+                    if font_path:
+                        font_title = ImageFont.truetype(font_path, 40)
+                        font_text = ImageFont.truetype(font_path, 30)
+                        font_info = ImageFont.truetype(font_path, 20)
+                        break
+                except:
+                    continue
+            
+            # 如果所有字体都加载失败，使用默认字体
+            if font_title is None:
+                font_title = ImageFont.load_default()
+                font_text = ImageFont.load_default()
+                font_info = ImageFont.load_default()
+            
+            # 颜色定义
+            title_color = (0, 0, 0)  # 黑色
+            text_color = (70, 70, 70)  # 深灰色
+            info_color = (100, 100, 100)  # 灰色
+            border_color = (200, 200, 200)  # 浅灰色
+            
+            # 当前Y坐标
+            y = 30
+            
+            # 绘制顶部横线
+            draw.rectangle([20, y, img_width - 20, y + 3], fill=border_color)
+            y += 40  # ✅ 修改：增加间距，直接从作者信息开始
+            
+            title_text = "大佳新内容推送"
+            bbox = draw.textbbox((0, 0), title_text, font=font_title)
+            title_width = bbox[2] - bbox[0]
+            draw.text(((img_width - title_width) // 2, y), title_text, 
+                    fill=title_color, font=font_title)
+            y += 50
+            
+            draw.line([40, y, img_width - 40, y], fill=border_color, width=2)
+            y += 25
+            
+            # 绘制作者和时间
+            draw.text((40, y), f" 作者: {author_name}", 
+                    fill=info_color, font=font_info)
+            y += 25
+            draw.text((40, y), f" 时间: {create_time}", 
+                    fill=info_color, font=font_info)
+            y += 30
+            
+            # 在时间和内容之间添加分割线
+            draw.line([40, y, img_width - 40, y], fill=border_color, width=1)
+            y += 20
+            
+            # 绘制内容标签
+            draw.text((40, y), " 内容:", fill=info_color, font=font_info)
+            y += 25
+            
+            # 处理内容文本（自动换行）
+            max_content_width = img_width - 80
+            content_lines = []
+            
+            # 按换行符分割段落
+            paragraphs = content.split('\n')
+            for para in paragraphs:
+                if para.strip():
+                    # 逐字添加，计算实际宽度
+                    current_line = ""
+                    for char in para:
+                        test_line = current_line + char
+                        bbox = draw.textbbox((0, 0), test_line, font=font_text)
+                        line_width = bbox[2] - bbox[0]
+                        
+                        if line_width <= max_content_width:
+                            current_line = test_line
+                        else:
+                            # 当前行宽度超出，换到下一行
+                            if current_line:
+                                content_lines.append(current_line)
+                            current_line = char
+                    
+                    # 添加最后一行
+                    if current_line:
+                        content_lines.append(current_line)
+                else:
+                    content_lines.append("")  # 保留空行
+            
+            # 绘制内容（限制行数，超出部分省略）
+            max_lines = 35  # 最多显示35行
+            for line in content_lines[:max_lines]:
+                if line:
+                    draw.text((40, y), line, fill=text_color, font=font_text, stroke_width=1, stroke_fill=(240, 240, 240))
+                y += 40
+            
+            if len(content_lines) > max_lines:
+                draw.text((40, y), "... (内容过长，已截断)", 
+                        fill=info_color, font=font_info)
+                y += 25
+                
+            # 添加旋转45度水印"六便士出品"（在最后一张图片位置，最上层）
+            try:
+                watermark_text = "六便士出品，欢迎联系作者微信：yughurt1984"
+                watermark_font_size = 32
+                
+                # 尝试加载字体
+                try:
+                    watermark_font = ImageFont.truetype("C:\\Windows\\Fonts\\msyh.ttc", watermark_font_size)
+                except:
+                    watermark_font = ImageFont.load_default()
+                
+                # 计算水印文字的尺寸
+                temp_draw = ImageDraw.Draw(image)
+                watermark_bbox = temp_draw.textbbox((0, 0), watermark_text, font=watermark_font)
+                watermark_w = watermark_bbox[2] - watermark_bbox[0]
+                watermark_h = watermark_bbox[3] - watermark_bbox[1]
+                
+                # 创建一个足够大的临时图片来容纳旋转后的水印
+                diagonal = int((watermark_w ** 2 + watermark_h ** 2) ** 0.5) + 40
+                watermark_img = Image.new('RGBA', (diagonal, diagonal), (255, 255, 255, 0))
+                watermark_draw = ImageDraw.Draw(watermark_img)
+                
+                # 在临时图片中心绘制水印文字（调淡颜色）
+                watermark_color = (180, 180, 180, 150)  # 浅灰色，透明度150
+                text_x = (diagonal - watermark_w) // 2
+                text_y = (diagonal - watermark_h) // 2
+                watermark_draw.text((text_x, text_y), watermark_text, 
+                                 fill=watermark_color, font=watermark_font)
+                
+                # 旋转45度
+                watermark_img = watermark_img.rotate(45, expand=False)
+                
+                 # 计算水印位置：在内容结束位置的斜45°方向
+                watermark_base_x = img_width // 2  # 水平居中
+                watermark_base_y = y  # 内容结束位置的Y坐标
+                
+                # 水印位于基准位置的斜45°上方
+                # 向右下45°方向偏移
+                offset_x = 10   # 水平偏移（向右）
+                offset_y = 0  # 垂直偏移（向上，负值表示向上）
+                watermark_x = watermark_base_x - diagonal // 2 + offset_x
+                watermark_y = watermark_base_y - diagonal // 2 + offset_y
+                
+                # 将水印粘贴到主图片上（最上层）
+                image.paste(watermark_img, (watermark_x, watermark_y), watermark_img)
+                
+                self.log(f"   ✅ 已添加水印: {watermark_text} 位置({watermark_x}, {watermark_y})")
+            except Exception as e:
+                self.log(f"   ⚠️ 添加水印失败: {e}")
+                import traceback
+                self.log(f"   详细错误: {traceback.format_exc()}")    
+            
+            # 绘制底部信息
+            y += 20
+            draw.line([40, y, img_width - 40, y], fill=border_color, width=1)
+            y += 25
+            
+            # ✅ 修改：删除"第几条"统计，只保留来源信息
+            footer_text = f" 本内容由六便士整理推送,有需要请联系vx:yughurt1984"
+            footer_bbox = draw.textbbox((0, 0), footer_text, font=font_info)
+            footer_width = footer_bbox[2] - footer_bbox[0]
+            draw.text(((img_width - footer_width) // 2, y), footer_text, 
+                    fill=info_color, font=font_info)
+            
+            # 保存图片到临时目录
+            temp_dir = os.path.join(os.path.dirname(__file__), "temp_images")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # 生成文件名（使用时间戳避免冲突）
+            import time
+            timestamp = int(time.time() * 1000)
+            image_filename = f"text_msg_{timestamp}.png"
+            image_path = os.path.join(temp_dir, image_filename)
+            
+            # 保存图片
+            image.save(image_path, 'PNG', quality=95,dpi=(600, 600))
+            
+            self.log(f"   ✅ 文本已转换为图片: {image_path}")
+            return image_path
+            
+        except Exception as e:
+            self.log(f"   ❌ 文本转图片失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    
     def _handle_text_message(self, index: int, title: str, content: str, author_name: str, 
-                           create_time: str, total: int) -> bool:
-        """处理纯文本消息推送（分支3）"""
+                       create_time: str, total: int) -> bool:
+        """
+        处理纯文本消息推送（分支4）
+        修改：先将文本转换为图片，然后推送图片
+        """
         try:
             # 清理HTML标签
             title = clean_html_tags(title)
             content = clean_html_tags(content)
             
-            # 构建markdown消息
-            lines = [
-                "# 📣 大佳新内容通知",
-                "",
-                f"## {title}",
-                "",
-                f"👤 作者: {author_name}",
-                f"⏰ 时间: {create_time}",
-                "",
-                f"📄 内容:",
-                f"{content}",
-                "",
-                "---",
-                f"*🤖 本内容由六便士整理推送 - 第{index}/{total}条*"
-            ]
+            # ✅ 修改：将文本转换为图片
+            image_path = self._text_to_image(
+                title=title,
+                content=content,
+                author_name=author_name,
+                create_time=create_time,
+                index=index,
+                total=total
+            )
             
-            markdown_content = "\n".join(lines)
+            if not image_path:
+                self.log(f"❌ 第{index}/{total}条：文本转图片失败")
+                return False
             
-            # 发送消息
-            if self.send_markdown(markdown_content):
-                self.log(f"✅ 第{index}/{total}条推送成功")
+            # ✅ 修改：发送图片而不是markdown消息
+            if self.send_image(image_path):
+                self.log(f"✅ 第{index}/{total}条推送成功（图片）")
+                
+                # 清理临时图片文件
+                try:
+                    os.remove(image_path)
+                    self.log(f"   🗑️ 已删除临时图片: {image_path}")
+                except:
+                    pass
+                
                 return True
             else:
                 self.log(f"❌ 第{index}/{total}条推送失败")
@@ -826,4 +1408,7 @@ class WeComWebhook:
             
         except Exception as e:
             self.log(f"❌ 第{index}条文本推送异常: {e}")
+            import traceback
+            traceback.print_exc()
             return False
+
