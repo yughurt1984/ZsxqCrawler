@@ -255,13 +255,22 @@ class ZSXQInteractiveCrawler:
             # 创建PDF输出目录
             os.makedirs(output_dir, exist_ok=True)
             
-            # ✅ 生成PDF文件名（优先使用传入的标题）
+            # ✅ 生成PDF文件名（优先使用传入的标题，移除所有标点符号）
             if title and title.strip():
-                pdf_filename = f"{title}.pdf"
+                import re
+                # 移除所有标点符号（中文和英文），只保留中文、英文、数字、空格
+                safe_title = re.sub(r'[^\w\s\u4e00-\u9fff]', '', title.strip())
+                # 移除多余空格
+                safe_title = re.sub(r'\s+', '', safe_title)
+                # 限制文件名长度
+                if len(safe_title) > 100:
+                    safe_title = safe_title[:100]
+                pdf_filename = f"{safe_title}六便士.pdf"
             else:
                 # 如果没有标题，使用URL的hash
                 file_hash = hashlib.md5(url.encode()).hexdigest()[:12]
-                pdf_filename = f"article_{file_hash}.pdf"
+                pdf_filename = f"article_{file_hash}六便士.pdf"
+
             
             pdf_path = os.path.join(output_dir, pdf_filename)
             
@@ -405,13 +414,18 @@ class ZSXQInteractiveCrawler:
                 # ✅ 注入CSS样式（使用xhtml2pdf内置的简体中文字体STSong-Light）
                 css = '''
                     <style>
+                        @page {
+                            size: A4;
+                            margin: 2cm;
+                        }
                         body {
                             font-family: STSong-Light,Times New Roman, Arial, sans-serif;
                             line-height: 1.6;
                             margin: 0;
-                            padding: 20px;
+                            padding: 15px;
                             font-size: 12pt;
-                            
+                            word-wrap: break-word;
+                            overflow-wrap: break-word;
                         }
                         img {
                             max-width: 100% !important;
@@ -422,10 +436,22 @@ class ZSXQInteractiveCrawler:
                         p, div {
                             margin: 0.1em 0;
                             padding: 0.2em 0;
+                            word-wrap: break-word;
+                            overflow-wrap: break-word;
+                        }
+                        pre, code {
+                            white-space: pre-wrap;
+                            word-wrap: break-word;
+                            overflow-wrap: break-word;
+                        }
+                        table {
+                            max-width: 100%;
+                            word-wrap: break-word;
                         }
                         h1, h2, h3, h4, h5, h6 {
                             margin: 1em 0 0.5em 0;
                             font-weight: bold;
+                            word-wrap: break-word;
                         }
                     </style>
                 '''

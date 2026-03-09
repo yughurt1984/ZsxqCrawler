@@ -119,7 +119,7 @@ class WeComWebhook:
         """
         try:
             # 水印PDF文件路径（硬编码）
-            watermark_pdf_path = r"E:/zsxq/ZsxqCrawler-wxpush/output/databases/28858542222551/downloads/watermark.pdf"
+            watermark_pdf_path = r"E:/zsxq/ZsxqCrawler-wxpush/watermark.pdf"
             
             # 检查水印PDF是否存在
             if not os.path.exists(watermark_pdf_path):
@@ -357,9 +357,7 @@ class WeComWebhook:
             return False
         
         # ✅ 限制最多推送10个话题
-        topics_to_send = new_topics[:10]
-        if len(new_topics) > 10:
-            self.log(f"⚠️ 话题数量超过10个，只推送前10个（总共{len(new_topics)}个）")
+        topics_to_send = new_topics
         
         success_count = 0
         
@@ -367,13 +365,58 @@ class WeComWebhook:
         for i, topic in enumerate(topics_to_send, 1):
             try:
                 title = topic.get('title', '无标题')
-                # 内容在 talk.text 字段中
                 talk = topic.get('talk', {})
-                content = talk.get('text', '无内容')
+
+                # 获取内容（处理问答类型）
+                question = topic.get('question', {})
+                answer = topic.get('answer', {})
+
+                # 判断是否是问答类型
+                if question or answer:
+                    # 问答类型：组合问题和回答
+                    content_parts = []
+                    
+                    # 获取提问者信息
+                    question_owner = question.get('owner', {})
+                    question_name = question_owner.get('name', '匿名')
+                    if question.get('anonymous', False):
+                        question_name = '匿名用户'
+                    
+                    # 添加问题
+                    question_text = question.get('text', '')
+                    if question_text:
+                        content_parts.append(f"【提问】{question_name}：\n{question_text}")
+                    
+                    # 获取回答者信息
+                    answer_owner = answer.get('owner', {})
+                    answer_name = answer_owner.get('name', '未知')
+                    
+                    # 添加回答
+                    answer_text = answer.get('text', '')
+                    if answer_text:
+                        content_parts.append(f"【回答】{answer_name}：\n{answer_text}")
+                    
+                    content = '\n\n'.join(content_parts) if content_parts else '无内容'
+                else:
+                    # 普通话题：从talk获取内容
+                    content = talk.get('text', '无内容')
+
                 create_time = topic.get('create_time', '未知时间')
-                # 作者信息在 talk.owner.name 字段中
-                owner = talk.get('owner', {})
-                author_name = owner.get('name', '六便士')
+                
+                # 作者信息：问答类型显示回答者，普通话题显示发布者
+                if question or answer:
+                    # 问答类型：优先显示回答者
+                    if answer and answer.get('owner'):
+                        author_name = answer.get('owner', {}).get('name', '未知')
+                    elif question and question.get('owner') and not question.get('anonymous', False):
+                        author_name = question.get('owner', {}).get('name', '匿名用户')
+                    else:
+                        author_name = '匿名用户'
+                else:
+                    # 普通话题：从talk获取
+                    owner = talk.get('owner', {})
+                    author_name = owner.get('name', '六便士')
+
                 
                 # 提取文章链接
                 article_url = self._extract_article_url(talk, topic)
@@ -393,10 +436,10 @@ class WeComWebhook:
                         success_count += 1
                     continue  # 已处理，跳过后续分支
                 
-                # ========== 4. 分支3: 内容中有图片 → 下载图片，推送文本和图片 ==========
+                # ========== 4. 分支3: 内容中有图片 → 分开推送文本和图片（改写） ==========
                 content_images = self._extract_images(talk)
                 if content_images and crawler:
-                    self.log(f"🖼️ 第{i}/{len(new_topics)}条：检测到图片和文字，准备合并推送...")
+                    self.log(f"🖼️ 第{i}/{len(new_topics)}条：检测到图片和文字，准备分开推送...")
                     
                     # 获取下载目录
                     pdf_output_dir = self._get_pdf_output_dir(crawler)
@@ -408,35 +451,45 @@ class WeComWebhook:
                         if img_path:
                             downloaded_images.append(img_path)
                     
-                    # 合并文本和图片为一张图片
-                    if downloaded_images:
-                        merged_image_path = self._text_and_images_to_image(
-                            title=title,
-                            content=content,
-                            author_name=author_name,
-                            create_time=create_time,
-                            image_paths=downloaded_images,
-                            index=i,
-                            total=len(new_topics)
-                        )
-                        
-                        if merged_image_path and self.send_image(merged_image_path):
-                            self.log(f"✅ 第{i}/{len(new_topics)}条推送成功（合并图片）")
-                            # 清理临时图片
-                            for img_path in downloaded_images:
-                                try:
-                                    os.remove(img_path)
-                                except:
-                                    pass
+                    push_success = True
+                    
+                    # 1. 先推送文字内容（转成图片）
+                    text_image_path = self._text_to_image(
+                        title=title,
+                        content=content,
+                        author_name=author_name,
+                        create_time=create_time,
+                        index=i,
+                        total=len(new_topics)
+                    )
+                    if text_image_path:
+                        if self.send_image(text_image_path):
+                            self.log(f"   ✅ 文字推送成功")
                             try:
-                                os.remove(merged_image_path)
+                                os.remove(text_image_path)
                             except:
                                 pass
-                            success_count += 1
                         else:
-                            self.log(f"❌ 第{i}/{len(new_topics)}条推送失败")
+                            self.log(f"   ❌ 文字推送失败")
+                            push_success = False
+                    
+                    # 2. 再推送图片
+                    for img_path in downloaded_images:
+                        if self.send_image(img_path):
+                            self.log(f"   ✅ 图片推送成功")
+                        else:
+                            self.log(f"   ❌ 图片推送失败")
+                            push_success = False
+                        try:
+                            os.remove(img_path)
+                        except:
+                            pass
+                    
+                    if push_success:
+                        self.log(f"✅ 第{i}/{len(new_topics)}条推送成功")
+                        success_count += 1
                     else:
-                        self.log(f"❌ 第{i}/{len(new_topics)}条：所有图片下载失败")
+                        self.log(f"❌ 第{i}/{len(new_topics)}条部分推送失败")
                     
                     continue  # 已处理，跳过后续分支
                 
@@ -738,9 +791,9 @@ class WeComWebhook:
             for font_path in font_paths:
                 try:
                     if font_path:
-                        font_title = ImageFont.truetype(font_path, 40)
-                        font_text = ImageFont.truetype(font_path, 30)
-                        font_info = ImageFont.truetype(font_path, 20)
+                        font_title = ImageFont.truetype(font_path, 32)
+                        font_text = ImageFont.truetype(font_path, 22)
+                        font_info = ImageFont.truetype(font_path, 16)
                         break
                 except:
                     continue
@@ -819,9 +872,21 @@ class WeComWebhook:
             y += 15
             
             # 绘制标题
-            title_text = "大佳新内容推送"
+            title_text = "新内容推送"
             bbox = draw.textbbox((0, 0), title_text, font=font_title)
             title_width = bbox[2] - bbox[0]
+            
+            # 在标题右侧添加二维码
+            qr_size = 220  # 二维码大小
+            try:
+                qr_img = Image.open("e:\\zsxq\\ZsxqCrawler-wxpush\\qrcode.jpg")
+                qr_img = qr_img.resize((qr_size, qr_size))
+                qr_x = img_width - qr_size - 25  # 右侧边距
+                qr_y = 10  # 与标题对齐
+                image.paste(qr_img, (qr_x, qr_y))
+            except Exception as e:
+                self.log(f"   ⚠️ 添加二维码失败: {e}")
+
             draw.text(((img_width - title_width) // 2, y), title_text, 
                     fill=title_color, font=font_title)
             y += 50
@@ -832,7 +897,7 @@ class WeComWebhook:
             
             # 绘制作者和时间
             draw.text((25, y), f" 作者: {author_name}", 
-                    fill=info_color, font=font_info)
+                    fill=info_color, font=font_info)            
             y += 25
             draw.text((25, y), f" 时间: {create_time}", 
                     fill=info_color, font=font_info)
@@ -847,12 +912,46 @@ class WeComWebhook:
             y += 25
             
             # 绘制所有内容（不限制行数），增大行间距
+            # 创建干扰文字的小字体
+            try:
+                font_noise = ImageFont.truetype("C:\\Windows\\Fonts\\msyh.ttc", 16)
+            except:
+                font_noise = ImageFont.load_default()
+            noise_color = (140, 140, 140)  # 极浅色，几乎不可见
+            
+            # 每10行随机选2行进行重叠干扰
+            total_lines = len([l for l in content_lines if l])  # 非空行总数
+            overlap_lines = set()
+            for start in range(1, total_lines + 1, 10):
+                end = min(start + 9, total_lines)
+                # 在当前10行中随机选2行（相邻）
+                if end - start + 1 >= 2:
+                    overlap_start = random.randint(start, end - 1)
+                    overlap_lines.add(overlap_start)
+                    overlap_lines.add(overlap_start + 1)
+            
+            line_count = 0
             for line in content_lines:
                 if line:
-                    draw.text((25, y), line, fill=text_color, font=font_text, stroke_width=1, stroke_fill=(240, 240, 240))
-                y += 40  # 增大行间距从22到40
-                        
-            
+                    draw.text((40, y), line, fill=text_color, font=font_text, stroke_width=1, stroke_fill=(240, 240, 240))
+                    
+                    # 行间距：重叠行缩小间距
+                    if line_count + 1 in overlap_lines and (line_count + 2) in overlap_lines:
+                        y += 11  # 重叠行的第一行后减少间距
+                    elif line_count + 1 in overlap_lines and (line_count) in overlap_lines:
+                        y += 22  # 重叠行的第二行后恢复正常间距
+                    else:
+                        y += 22  # 正常行距
+                    
+                    line_count += 1
+                    
+                    # 第6行插入干扰文字
+                    if line_count == 6:
+                        y += 15
+                        noise_text = "六便士仅有企业微信推送群，QQ皆为转发，长期稳定推送，请务必添加原作者微信：MK0914666"
+                        draw.text((40, y), noise_text, fill=noise_color, font=font_noise)                        
+                        y += 35
+                   
             # 绘制图片（网格布局，每行2张）
             if image_paths:
                 y += 20
@@ -925,65 +1024,12 @@ class WeComWebhook:
                 # 没有图片时，记录当前y位置
                 last_image_y = y
             
-            # 添加旋转45度水印"六便士出品"（在最后一张图片位置，最上层）
-            try:
-                watermark_text = "六便士出品，欢迎联系作者微信：yughurt1984"
-                watermark_font_size = 32
-                
-                # 尝试加载字体
-                try:
-                    watermark_font = ImageFont.truetype("C:\\Windows\\Fonts\\msyh.ttc", watermark_font_size)
-                except:
-                    watermark_font = ImageFont.load_default()
-                
-                # 计算水印文字的尺寸
-                temp_draw = ImageDraw.Draw(image)
-                watermark_bbox = temp_draw.textbbox((0, 0), watermark_text, font=watermark_font)
-                watermark_w = watermark_bbox[2] - watermark_bbox[0]
-                watermark_h = watermark_bbox[3] - watermark_bbox[1]
-                
-                # 创建一个足够大的临时图片来容纳旋转后的水印
-                diagonal = int((watermark_w ** 2 + watermark_h ** 2) ** 0.5) + 40
-                watermark_img = Image.new('RGBA', (diagonal, diagonal), (255, 255, 255, 0))
-                watermark_draw = ImageDraw.Draw(watermark_img)
-                
-                # 在临时图片中心绘制水印文字（调淡颜色）
-                watermark_color = (180, 180, 180, 150)  # 浅灰色，透明度150
-                text_x = (diagonal - watermark_w) // 2
-                text_y = (diagonal - watermark_h) // 2
-                watermark_draw.text((text_x, text_y), watermark_text, 
-                                 fill=watermark_color, font=watermark_font)
-                
-                # 旋转45度
-                watermark_img = watermark_img.rotate(45, expand=False)
-                
-                # 计算水印位置：在最后一张图片起始位置的斜45°方向
-                # 水印位置以最后一张图片的起始位置为基准
-                watermark_base_x = img_width // 2  # 水平居中
-                watermark_base_y = last_image_y if last_image_y else y  # 最后一张图片的Y坐标
-                
-                # 水印位于基准位置的斜45°上方
-                # 向右下45°方向偏移
-                offset_x = 10   # 水平偏移（向右）
-                offset_y = -200  # 垂直偏移（向上，负值表示向上）
-                watermark_x = watermark_base_x - diagonal // 2 + offset_x
-                watermark_y = watermark_base_y - diagonal // 2 + offset_y
-                
-                # 将水印粘贴到主图片上（最上层）
-                image.paste(watermark_img, (watermark_x, watermark_y), watermark_img)
-                
-                self.log(f"   ✅ 已添加水印: {watermark_text} 位置({watermark_x}, {watermark_y})")
-            except Exception as e:
-                self.log(f"   ⚠️ 添加水印失败: {e}")
-                import traceback
-                self.log(f"   详细错误: {traceback.format_exc()}")    
-            
             # 绘制底部信息
             y += 15
             draw.line([25, y, img_width - 40, y], fill=border_color, width=1)
             y += 20
             
-            footer_text = "🤖 本内容由六便士整理推送"
+            footer_text = "**六便士仅有企业微信推送群，QQ群皆为转发，为确保稳定推送，请务必添加原作者微信：MK0914666**"
             footer_bbox = draw.textbbox((0, 0), footer_text, font=font_info)
             footer_width = footer_bbox[2] - footer_bbox[0]
             draw.text(((img_width - footer_width) // 2, y), footer_text, 
@@ -1182,16 +1228,21 @@ class WeComWebhook:
             font_text = None
             font_info = None
             
+            # 字体大小变量（可根据内容长度动态调整）
+            base_font_size_title = 32
+            base_font_size_text = 22
+            base_font_size_info = 16
+            
             for font_path in font_paths:
                 try:
                     if font_path:
-                        font_title = ImageFont.truetype(font_path, 40)
-                        font_text = ImageFont.truetype(font_path, 30)
-                        font_info = ImageFont.truetype(font_path, 20)
+                        font_title = ImageFont.truetype(font_path, base_font_size_title)
+                        font_text = ImageFont.truetype(font_path, base_font_size_text)
+                        font_info = ImageFont.truetype(font_path, base_font_size_info)
                         break
                 except:
                     continue
-            
+
             # 如果所有字体都加载失败，使用默认字体
             if font_title is None:
                 font_title = ImageFont.load_default()
@@ -1211,9 +1262,21 @@ class WeComWebhook:
             draw.rectangle([20, y, img_width - 20, y + 3], fill=border_color)
             y += 40  # ✅ 修改：增加间距，直接从作者信息开始
             
-            title_text = "大佳新内容推送"
+            title_text = "新内容推送"
             bbox = draw.textbbox((0, 0), title_text, font=font_title)
             title_width = bbox[2] - bbox[0]
+
+            # 在标题右侧添加二维码
+            qr_size = 220 # 二维码大小
+            try:
+                qr_img = Image.open("e:\\zsxq\\ZsxqCrawler-wxpush\\qrcode.jpg")
+                qr_img = qr_img.resize((qr_size, qr_size))
+                qr_x = img_width - qr_size - 40  # 右侧边距
+                qr_y = 10  # 与标题对齐
+                image.paste(qr_img, (qr_x, qr_y))
+            except Exception as e:
+                self.log(f"   ⚠️ 添加二维码失败: {e}")
+            
             draw.text(((img_width - title_width) // 2, y), title_text, 
                     fill=title_color, font=font_title)
             y += 50
@@ -1224,10 +1287,12 @@ class WeComWebhook:
             # 绘制作者和时间
             draw.text((40, y), f" 作者: {author_name}", 
                     fill=info_color, font=font_info)
+            
             y += 25
             draw.text((40, y), f" 时间: {create_time}", 
                     fill=info_color, font=font_info)
             y += 30
+
             
             # 在时间和内容之间添加分割线
             draw.line([40, y, img_width - 40, y], fill=border_color, width=1)
@@ -1265,82 +1330,113 @@ class WeComWebhook:
                         content_lines.append(current_line)
                 else:
                     content_lines.append("")  # 保留空行
-            
-            # 绘制内容（限制行数，超出部分省略）
-            max_lines = 35  # 最多显示35行
-            for line in content_lines[:max_lines]:
-                if line:
-                    draw.text((40, y), line, fill=text_color, font=font_text, stroke_width=1, stroke_fill=(240, 240, 240))
-                y += 40
+
+                        
+            # 如果内容过长，自动缩小字体以容纳全部内容
+            max_lines = 30  # 基准最大行数
+            min_font_size = 12  # 最小字体大小
             
             if len(content_lines) > max_lines:
-                draw.text((40, y), "... (内容过长，已截断)", 
-                        fill=info_color, font=font_info)
-                y += 25
+                # 计算缩放比例
+                scale_factor = max(min_font_size / base_font_size_text, max_lines / len(content_lines))
+                scaled_font_text = int(base_font_size_text * scale_factor)
+                scaled_font_info = int(base_font_size_info * scale_factor)
                 
-            # 添加旋转45度水印"六便士出品"（在最后一张图片位置，最上层）
-            try:
-                watermark_text = "六便士出品，欢迎联系作者微信：yughurt1984"
-                watermark_font_size = 32
+                # 重新加载缩放后的字体
+                for font_path in font_paths:
+                    try:
+                        if font_path:
+                            font_text = ImageFont.truetype(font_path, scaled_font_text)
+                            font_info = ImageFont.truetype(font_path, scaled_font_info)
+                            break
+                    except:
+                        continue
                 
-                # 尝试加载字体
-                try:
-                    watermark_font = ImageFont.truetype("C:\\Windows\\Fonts\\msyh.ttc", watermark_font_size)
-                except:
-                    watermark_font = ImageFont.load_default()
+                # 重新计算内容行数（字体变小后每行能容纳更多字符）
+                content_lines = []
+                for para in paragraphs:
+                    if para.strip():
+                        current_line = ""
+                        for char in para:
+                            test_line = current_line + char
+                            bbox = draw.textbbox((0, 0), test_line, font=font_text)
+                            line_width = bbox[2] - bbox[0]
+                            
+                            if line_width <= max_content_width:
+                                current_line = test_line
+                            else:
+                                if current_line:
+                                    content_lines.append(current_line)
+                                current_line = char
+                        
+                        if current_line:
+                            content_lines.append(current_line)
+                    else:
+                        content_lines.append("")
                 
-                # 计算水印文字的尺寸
-                temp_draw = ImageDraw.Draw(image)
-                watermark_bbox = temp_draw.textbbox((0, 0), watermark_text, font=watermark_font)
-                watermark_w = watermark_bbox[2] - watermark_bbox[0]
-                watermark_h = watermark_bbox[3] - watermark_bbox[1]
-                
-                # 创建一个足够大的临时图片来容纳旋转后的水印
-                diagonal = int((watermark_w ** 2 + watermark_h ** 2) ** 0.5) + 40
-                watermark_img = Image.new('RGBA', (diagonal, diagonal), (255, 255, 255, 0))
-                watermark_draw = ImageDraw.Draw(watermark_img)
-                
-                # 在临时图片中心绘制水印文字（调淡颜色）
-                watermark_color = (180, 180, 180, 150)  # 浅灰色，透明度150
-                text_x = (diagonal - watermark_w) // 2
-                text_y = (diagonal - watermark_h) // 2
-                watermark_draw.text((text_x, text_y), watermark_text, 
-                                 fill=watermark_color, font=watermark_font)
-                
-                # 旋转45度
-                watermark_img = watermark_img.rotate(45, expand=False)
-                
-                 # 计算水印位置：在内容结束位置的斜45°方向
-                watermark_base_x = img_width // 2  # 水平居中
-                watermark_base_y = y  # 内容结束位置的Y坐标
-                
-                # 水印位于基准位置的斜45°上方
-                # 向右下45°方向偏移
-                offset_x = 10   # 水平偏移（向右）
-                offset_y = 0  # 垂直偏移（向上，负值表示向上）
-                watermark_x = watermark_base_x - diagonal // 2 + offset_x
-                watermark_y = watermark_base_y - diagonal // 2 + offset_y
-                
-                # 将水印粘贴到主图片上（最上层）
-                image.paste(watermark_img, (watermark_x, watermark_y), watermark_img)
-                
-                self.log(f"   ✅ 已添加水印: {watermark_text} 位置({watermark_x}, {watermark_y})")
-            except Exception as e:
-                self.log(f"   ⚠️ 添加水印失败: {e}")
-                import traceback
-                self.log(f"   详细错误: {traceback.format_exc()}")    
+                self.log(f"   📏 内容过长({len(content_lines)}行)，字体缩放至 {scaled_font_text}px")
+
             
+            # 绘制全部内容（不再截断）
+            # 创建干扰文字的小字体
+            try:
+                font_noise = ImageFont.truetype("C:\\Windows\\Fonts\\msyh.ttc", 16)
+            except:
+                font_noise = ImageFont.load_default()
+            noise_color = (140, 140, 140)  # 极浅色，几乎不可见
+            
+            # 计算中间位置的两行进行重叠干扰
+            total_lines = len([l for l in content_lines if l])  # 非空行总数
+            overlap_lines = set()
+            for start in range(1, total_lines + 1, 10):
+                end = min(start + 9, total_lines)
+                # 在当前10行中随机选2行（相邻）
+                if end - start + 1 >= 2:
+                    overlap_start = random.randint(start, end - 1)
+                    overlap_lines.add(overlap_start)
+                    overlap_lines.add(overlap_start + 1)
+            
+            line_count = 0
+            for line in content_lines:
+                if line:
+                    draw.text((40, y), line, fill=text_color, font=font_text, stroke_width=1, stroke_fill=(240, 240, 240))
+                    
+                    # 行间距：重叠行缩小间距
+                    if line_count + 1 in overlap_lines and (line_count + 2) in overlap_lines:
+                        y += 11  # 重叠行的第一行后减少间距
+                    elif line_count + 1 in overlap_lines and (line_count) in overlap_lines:
+                        y += 22  # 重叠行的第二行后恢复正常间距
+                    else:
+                        y += 22  # 正常行距
+                    
+                    line_count += 1
+                    
+                    # 第6行插入干扰文字
+                    if line_count == 6:
+                        y += 15
+                        noise_text = "六便士仅有企业微信推送群，QQ皆为转发，长期稳定推送，请务必添加原作者微信：MK0914666"
+                        draw.text((40, y), noise_text, fill=noise_color, font=font_noise)                        
+                        y += 35
+
+                               
             # 绘制底部信息
             y += 20
             draw.line([40, y, img_width - 40, y], fill=border_color, width=1)
             y += 25
             
-            # ✅ 修改：删除"第几条"统计，只保留来源信息
-            footer_text = f" 本内容由六便士整理推送,有需要请联系vx:yughurt1984"
-            footer_bbox = draw.textbbox((0, 0), footer_text, font=font_info)
-            footer_width = footer_bbox[2] - footer_bbox[0]
-            draw.text(((img_width - footer_width) // 2, y), footer_text, 
-                    fill=info_color, font=font_info)
+            # 底部多行声明
+            footer_lines = [
+                "声明：原作者长期购买星球，为确保能够长期稳定推送，请务必添加原作者微信：MK0914666",
+                "六便士仅有企业微信推送群，QQ群皆为转发，请注意风险！！",
+                "添加作者微信，另免费赠送其他优质财经博主星球体验！！"
+            ]
+            for line in footer_lines:
+                footer_bbox = draw.textbbox((0, 0), line, font=font_info)
+                footer_width = footer_bbox[2] - footer_bbox[0]
+                draw.text(((img_width - footer_width) // 2, y), line, 
+                        fill=info_color, font=font_info)
+                y += 22  # 行间距
+
             
             # 保存图片到临时目录
             temp_dir = os.path.join(os.path.dirname(__file__), "temp_images")
