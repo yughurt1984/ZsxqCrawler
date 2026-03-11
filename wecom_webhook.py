@@ -371,6 +371,8 @@ class WeComWebhook:
                 question = topic.get('question', {})
                 answer = topic.get('answer', {})
 
+                question_image_urls = []  # 初始化
+
                 # 判断是否是问答类型
                 if question or answer:
                     # 问答类型：组合问题和回答
@@ -397,9 +399,28 @@ class WeComWebhook:
                         content_parts.append(f"【回答】{answer_name}：\n{answer_text}")
                     
                     content = '\n\n'.join(content_parts) if content_parts else '无内容'
+                    
+                    # 🆕 提取提问的图片URL
+                    question_images = question.get('images', [])
+                    for img in question_images:
+                        url = img.get('large', {}).get('url') or img.get('thumbnail', {}).get('url')
+                        if url:
+                            question_image_urls.append(url)
+
                 else:
                     # 普通话题：从talk获取内容
                     content = talk.get('text', '无内容')
+                
+                # 🆕 统一提取内容图片（包括talk和question）
+                all_content_images = []
+                
+                # 从talk提取图片
+                talk_images = self._extract_images(talk)
+                all_content_images.extend(talk_images)
+                
+                # 从question提取图片（问答类型）
+                all_content_images.extend(question_image_urls)
+
 
                 create_time = topic.get('create_time', '未知时间')
                 
@@ -437,7 +458,7 @@ class WeComWebhook:
                     continue  # 已处理，跳过后续分支
                 
                 # ========== 4. 分支3: 内容中有图片 → 分开推送文本和图片（改写） ==========
-                content_images = self._extract_images(talk)
+                content_images = all_content_images if len(all_content_images) > 1 else None
                 if content_images and crawler:
                     self.log(f"🖼️ 第{i}/{len(new_topics)}条：检测到图片和文字，准备分开推送...")
                     
@@ -494,7 +515,9 @@ class WeComWebhook:
                     continue  # 已处理，跳过后续分支
                 
                  # ========== 5. 分支4: 纯文本推送 ==========
-                if self._handle_text_message(i, title, content, author_name, create_time, len(new_topics)):
+                # 🆕 如果只有1张图片，嵌入PNG推送
+                single_image = all_content_images[0] if len(all_content_images) == 1 else None
+                if self._handle_text_message(i, title, content, author_name, create_time, len(new_topics), [single_image] if single_image else None, crawler):
                     success_count += 1
                     
             except Exception as e:
@@ -908,7 +931,7 @@ class WeComWebhook:
             y += 20
             
             # 绘制内容标签
-            draw.text((25, y), " 内容:", fill=info_color, font=font_info)
+            draw.text((25, y), "【内容】:", fill=text_color, font=font_text)
             y += 25
             
             # 绘制所有内容（不限制行数），增大行间距
@@ -937,7 +960,7 @@ class WeComWebhook:
                     
                     # 行间距：重叠行缩小间距
                     if line_count + 1 in overlap_lines and (line_count + 2) in overlap_lines:
-                        y += 11  # 重叠行的第一行后减少间距
+                        y += 16  # 重叠行的第一行后减少间距
                     elif line_count + 1 in overlap_lines and (line_count) in overlap_lines:
                         y += 22  # 重叠行的第二行后恢复正常间距
                     else:
@@ -1193,9 +1216,11 @@ class WeComWebhook:
             return False
     
     def _text_to_image(self, title: str, content: str, author_name: str, 
-                   create_time: str, index: int, total: int) -> Optional[str]:
+                   create_time: str, index: int, total: int,
+                   question_images: Optional[List[str]] = None,
+                   crawler = None) -> Optional[str]:
         """
-        将文本内容转换为图片
+        将文本内容转换为图片，支持嵌入图片
         
         Args:
             title: 标题
@@ -1204,7 +1229,9 @@ class WeComWebhook:
             create_time: 创建时间
             index: 当前索引
             total: 总数
-            
+            images: 图片URL列表（可选）
+            crawler: 爬虫实例，用于下载图片（可选）
+                
         Returns:
             图片文件路径，失败返回None
         """
@@ -1299,7 +1326,7 @@ class WeComWebhook:
             y += 20
             
             # 绘制内容标签
-            draw.text((40, y), " 内容:", fill=info_color, font=font_info)
+            draw.text((40, y), "【内容】:", fill=text_color, font=font_text)
             y += 25
             
             # 处理内容文本（自动换行）
@@ -1403,7 +1430,7 @@ class WeComWebhook:
                     
                     # 行间距：重叠行缩小间距
                     if line_count + 1 in overlap_lines and (line_count + 2) in overlap_lines:
-                        y += 11  # 重叠行的第一行后减少间距
+                        y += 16  # 重叠行的第一行后减少间距
                     elif line_count + 1 in overlap_lines and (line_count) in overlap_lines:
                         y += 22  # 重叠行的第二行后恢复正常间距
                     else:
@@ -1418,9 +1445,77 @@ class WeComWebhook:
                         draw.text((40, y), noise_text, fill=noise_color, font=font_noise)                        
                         y += 35
 
-                               
+            # 🆕 如果有提问图片，下载并嵌入
+            if question_images and crawler:
+                self.log(f"   🖼️ 检测到{len(question_images)}张提问图片，开始嵌入...")
+                
+                temp_dir = os.path.join(os.path.dirname(__file__), "temp_images")
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                downloaded_images = []
+                for img_url in question_images:
+                    img_path = self._download_image(img_url, temp_dir)
+                    if img_path:
+                        downloaded_images.append(img_path)
+                
+                if downloaded_images:
+                    # 计算需要的额外高度
+                    max_img_width = img_width - 80
+                    total_img_height = 0
+                    resized_images = []
+                    
+                    for img_path in downloaded_images:
+                        try:
+                            img = Image.open(img_path)
+                            # 宽度缩放
+                            if img.width > max_img_width:
+                                scale = max_img_width / img.width
+                                new_height = int(img.height * scale)
+                                img = img.resize((max_img_width, new_height), Image.LANCZOS)
+
+                            # 🆕 限制最大高度（压缩图片）
+                            max_img_height = 600  # 最大高度限制
+                            if img.height > max_img_height:
+                                scale = max_img_height / img.height
+                                new_width = int(img.width * scale)
+                                img = img.resize((new_width, max_img_height), Image.LANCZOS)
+
+                            resized_images.append(img)
+                            total_img_height += img.height + 10  # 减少图片间距
+                        except Exception as e:
+                            self.log(f"   ⚠️ 图片处理失败: {e}")
+                    
+                    if resized_images:
+                        # 计算剩余可用高度
+                        remaining_height = img_height - y - 100  # 预留底部声明空间
+                        
+                        # 如果图片总高度超过剩余空间，按比例缩放
+                        if total_img_height > remaining_height:
+                            scale = remaining_height / total_img_height
+                            for i, img in enumerate(resized_images):
+                                new_width = int(img.width * scale)
+                                new_height = int(img.height * scale)
+                                resized_images[i] = img.resize((new_width, new_height), Image.LANCZOS)
+                            self.log(f"   📐 图片已缩放以适应A4格式")
+                        
+                        # 直接在原图上绘制，不扩展高度
+                        draw.text((40, y), "【图片】:", fill=text_color, font=font_text)
+                        y += 30
+                        
+                        for img in resized_images:
+                            image.paste(img, (40, y))
+                            y += img.height + 10
+                        self.log(f"   ✅ 已嵌入{len(resized_images)}张提问图片")
+                    
+                    # 清理临时图片
+                    for img_path in downloaded_images:
+                        try:
+                            os.remove(img_path)
+                        except:
+                            pass
+
             # 绘制底部信息
-            y += 20
+            y += 10
             draw.line([40, y, img_width - 40, y], fill=border_color, width=1)
             y += 25
             
@@ -1449,7 +1544,7 @@ class WeComWebhook:
             image_path = os.path.join(temp_dir, image_filename)
             
             # 保存图片
-            image.save(image_path, 'PNG', quality=95,dpi=(600, 600))
+            image.save(image_path, 'PNG', optimize=True)
             
             self.log(f"   ✅ 文本已转换为图片: {image_path}")
             return image_path
@@ -1462,7 +1557,9 @@ class WeComWebhook:
 
     
     def _handle_text_message(self, index: int, title: str, content: str, author_name: str, 
-                       create_time: str, total: int) -> bool:
+                   create_time: str, total: int, 
+                   question_images: Optional[List[str]] = None,
+                   crawler = None) -> bool:
         """
         处理纯文本消息推送（分支4）
         修改：先将文本转换为图片，然后推送图片
@@ -1479,8 +1576,10 @@ class WeComWebhook:
                 author_name=author_name,
                 create_time=create_time,
                 index=index,
-                total=total
-            )
+                total=total,
+                question_images=question_images,
+                crawler=crawler
+        )
             
             if not image_path:
                 self.log(f"❌ 第{index}/{total}条：文本转图片失败")
