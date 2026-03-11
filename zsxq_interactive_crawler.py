@@ -255,21 +255,16 @@ class ZSXQInteractiveCrawler:
             # 创建PDF输出目录
             os.makedirs(output_dir, exist_ok=True)
             
-            # ✅ 生成PDF文件名（优先使用传入的标题，移除所有标点符号）
+            # ✅ 生成PDF文件名（优先使用传入的标题）
             if title and title.strip():
-                import re
-                # 移除所有标点符号（中文和英文），只保留中文、英文、数字、空格
-                safe_title = re.sub(r'[^\w\s\u4e00-\u9fff]', '', title.strip())
-                # 移除多余空格
-                safe_title = re.sub(r'\s+', '', safe_title)
-                # 限制文件名长度
-                if len(safe_title) > 100:
-                    safe_title = safe_title[:100]
-                pdf_filename = f"{safe_title}六便士.pdf"
+                # 清理文件名中的非法字符（Windows不允许 \ / : * ? " < > |）
+                safe_title = title.strip().replace('/', '_').replace('\\', '_').replace(':', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace('<', '_').replace('>', '_').replace('|', '_')
+                pdf_filename = f"{safe_title}（QQ群皆为私人转发，请务必添加原作者微信）.pdf"
+                
             else:
                 # 如果没有标题，使用URL的hash
                 file_hash = hashlib.md5(url.encode()).hexdigest()[:12]
-                pdf_filename = f"article_{file_hash}六便士.pdf"
+                pdf_filename = f"article_{file_hash}（QQ群皆为私人转发，请务必添加原作者微信）.pdf"
 
             
             pdf_path = os.path.join(output_dir, pdf_filename)

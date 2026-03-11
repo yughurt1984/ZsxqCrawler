@@ -1107,12 +1107,13 @@ export default function GroupDetailPage() {
 
   // 切换内容展开状态
   const toggleContent = (topicId: number) => {
+    const idStr = String(topicId);            // 改变点击“展开全部”无反应错误
     setExpandedContent(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(topicId)) {
-        newSet.delete(topicId);
+      if (newSet.has(idStr)) {
+        newSet.delete(idStr);
       } else {
-        newSet.add(topicId);
+        newSet.add(idStr);
       }
       return newSet;
     });
@@ -1370,17 +1371,29 @@ export default function GroupDetailPage() {
                           style={{wordBreak: 'break-all', overflowWrap: 'anywhere'}}
                           dangerouslySetInnerHTML={createSafeHtmlWithHighlight(topic.question_text || topicDetail?.question?.text || '', searchTerm)}
                         />
+  
+                        {/* 问题图片 */}
+                        {topicDetail?.question?.images && topicDetail.question.images.length > 0 && (
+                          <div className="mt-3">
+                            <ImageGallery
+                              images={topicDetail.question.images}
+                              className="w-full max-w-full"
+                              groupId={groupId.toString()}
+                            />
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
 
-                  {/* 回答部分 - 不再显示头像，因为已经在顶部显示了 */}
-                  {(topic.answer_text || topicDetail?.answer?.text) && (
-                    <div className="w-full">
-                      <div className="w-full max-w-full overflow-hidden" style={{minWidth: 0}}>
-                        <div
+
+                      {/* 回答部分 - 不再显示头像，因为已经在顶部显示了 */}
+                      {(topic.answer_text || topicDetail?.answer?.text) && (
+                        <div className="w-full">
+                          <div className="w-full max-w-full overflow-hidden" style={{ minWidth: 0 }}>
+                            <div
                           className={`text-sm text-gray-800 whitespace-pre-wrap break-words break-all leading-relaxed prose prose-sm max-w-none prose-p:my-1 prose-strong:text-gray-900 prose-a:text-blue-600 ${
-                            !expandedContent.has(topic.topic_id) ? 'line-clamp-8' : ''
+                            !expandedContent.has(String(topic.topic_id)) ? 'line-clamp-8' : ''      // 点击“显示全部”无反应
                           }`}
                           style={{
                             wordBreak: 'break-all',
@@ -1395,7 +1408,7 @@ export default function GroupDetailPage() {
                             onClick={() => toggleContent(topic.topic_id)}
                             className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
                           >
-                            {expandedContent.has(topic.topic_id) ? '收起' : '展开全部'}
+                            {expandedContent.has(String(topic.topic_id)) ? '收起' : '展开全部'}  
                           </button>
                         </div>
                       )}
@@ -1432,7 +1445,7 @@ export default function GroupDetailPage() {
                       <div className="bg-gray-50 rounded-lg p-3 w-full max-w-full overflow-hidden">
                         <div
                           className={`text-sm text-gray-800 break-words prose prose-sm max-w-none prose-p:my-1 prose-strong:text-gray-900 prose-a:text-blue-600 ${
-                            !expandedContent.has(topic.topic_id) ? 'line-clamp-8' : ''
+                            !expandedContent.has(String(topic.topic_id)) ? 'line-clamp-8' : ''    // 点击“显示全部”无反应
                           }`}
                           dangerouslySetInnerHTML={createSafeHtmlWithHighlight(topic.title, searchTerm)}
                         />
@@ -1443,7 +1456,7 @@ export default function GroupDetailPage() {
                             onClick={() => toggleContent(topic.topic_id)}
                             className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
                           >
-                            {expandedContent.has(topic.topic_id) ? '收起' : '展开全部'}
+                            {expandedContent.has(String(topic.topic_id)) ? '收起' : '展开全部'}     
                           </button>
                         </div>
                       )}
