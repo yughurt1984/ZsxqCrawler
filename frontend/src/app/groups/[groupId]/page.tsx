@@ -1371,6 +1371,17 @@ export default function GroupDetailPage() {
                           dangerouslySetInnerHTML={createSafeHtmlWithHighlight(topic.question_text || topicDetail?.question?.text || '', searchTerm)}
                         />
                       </div>
+                      {/* 问题图片 */}
+                      {topicDetail?.question?.images && topicDetail.question.images.length > 0 && (
+                        <div className="mt-3">
+                          <ImageGallery
+                            images={topicDetail.question.images}
+                            size="small"
+                            groupId={groupId.toString()}
+                          />
+                        </div>
+                      )}
+
                     </div>
                   )}
 
@@ -1401,6 +1412,17 @@ export default function GroupDetailPage() {
                       )}
                     </div>
                   )}
+                  {/* 回答图片 */}
+                  {topicDetail?.answer?.images && topicDetail.answer.images.length > 0 && (
+                    <div className="mt-3">
+                      <ImageGallery
+                        images={topicDetail.answer.images}
+                        size="small"
+                        groupId={groupId.toString()}
+                      />
+                    </div>
+                  )}
+
                 </div>
               ) : (
                 // 其他类型话题
