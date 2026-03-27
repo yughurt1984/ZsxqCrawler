@@ -262,7 +262,14 @@ class ZSXQDatabase:
             # 将现有数据根据 comment_id 设置 source
             self.cursor.execute("UPDATE images SET source = 'comment' WHERE comment_id IS NOT NULL")
             self.cursor.execute("UPDATE images SET source = 'talk' WHERE comment_id IS NULL")
-
+        
+        # 数据库迁移：为 topic_files 表添加 local_path 字段
+        try:
+            self.cursor.execute("SELECT local_path FROM topic_files LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute('ALTER TABLE topic_files ADD COLUMN local_path TEXT')
+            print("✅ 数据库迁移：topic_files 表添加 local_path 字段")
+            
         self.conn.commit()
     
     def import_topic_data(self, topic_data: Dict[str, Any]) -> bool:
@@ -1031,6 +1038,49 @@ class ZSXQDatabase:
                 current_time
             ))
 
+    
+    def insert_pdf_file(self, topic_id: int, pdf_name: str, pdf_path: str, pdf_size: int) -> bool:
+        """
+        插入 PDF 文件记录到 topic_files 表
+        
+        Args:
+            topic_id: 话题ID
+            pdf_name: PDF 文件名
+            pdf_path: PDF 完整路径
+            pdf_size: PDF 文件大小
+        
+        Returns:
+            是否插入成功
+        """
+        try:
+            from datetime import datetime, timezone, timedelta
+            beijing_tz = timezone(timedelta(hours=8))
+            current_time = datetime.now(beijing_tz).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
+            
+            # 计算文件 hash
+            import hashlib
+            with open(pdf_path, 'rb') as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
+            
+            self.cursor.execute('''
+                INSERT INTO topic_files 
+                (topic_id, file_id, name, hash, size, create_time, local_path, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (
+                topic_id,
+                -1,  # 本地生成的 PDF，使用 -1 标识
+                pdf_name,
+                file_hash,
+                pdf_size,
+                current_time,
+                pdf_path
+            ))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"   ⚠️ 插入 PDF 记录失败: {e}")
+            return False
+
 
     def get_topic_detail(self, topic_id: int):
         """获取完整的话题详情"""
@@ -1147,7 +1197,7 @@ class ZSXQDatabase:
                 # 获取话题文件
                 self.cursor.execute('''
                     SELECT
-                        file_id, name, hash, size, duration, download_count, create_time
+                        file_id, name, hash, size, duration, download_count, create_time, local_path
                     FROM topic_files
                     WHERE topic_id = ?
                     ORDER BY file_id
@@ -1155,7 +1205,7 @@ class ZSXQDatabase:
 
                 files = []
                 for file_row in self.cursor.fetchall():
-                    files.append({
+                    file_data = {
                         "file_id": file_row[0],
                         "name": file_row[1],
                         "hash": file_row[2],
@@ -1163,10 +1213,15 @@ class ZSXQDatabase:
                         "duration": file_row[4],
                         "download_count": file_row[5],
                         "create_time": file_row[6]
-                    })
+                    }
+                    # 添加 local_path（如果存在）
+                    if file_row[7]:  # local_path
+                        file_data["local_path"] = file_row[7]
+                    files.append(file_data)
 
                 if files:
                     talk_data["files"] = files
+
 
                 # 读取文章信息（如有）
                 self.cursor.execute('''

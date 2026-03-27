@@ -410,9 +410,11 @@ class WeComWebhook:
                 
                 # ========== 2. 分支1: 有zsxq链接 → 只推送链接内容 ==========
                 if article_url and 'zsxq' in article_url and crawler:
-                    if self._handle_article_pdf(i, article_url, title, crawler, len(new_topics)):
+                    topic_id = topic.get('topic_id')
+                    if self._handle_article_pdf(i, article_url, title, crawler, len(new_topics), topic_id, topic_files):
                         success_count += 1
                     continue  # 已处理，跳过后续分支
+
                 
                 # ========== 2. 分支2: 有附件 → 推送附件（含图片则一并推送） ==========
                 if topic_files and crawler:
@@ -849,9 +851,23 @@ class WeComWebhook:
         # ⭐ 添加返回语句
         return pdf_dir
     
-    def _handle_article_pdf(self, index: int, article_url: str, title: str, crawler, total: int) -> bool:
-        """处理文章PDF转换和推送（分支1）"""
+    def _handle_article_pdf(self, index: int, article_url: str, title: str, crawler, total: int, topic_id: int = None, topic_files: list = None) -> bool:
+        """处理文章PDF推送（分支1）- 优先使用已生成的PDF"""
         try:
+            # 🆕 优先检查 topic_files 中是否已有 PDF
+            if topic_files:
+                for file_info in topic_files:
+                    local_path = file_info.get('local_path', '')
+                    if local_path and local_path.endswith('.pdf') and os.path.exists(local_path):
+                        self.log(f"📄 第{index}/{total}条：发现已生成的PDF，直接推送...")
+                        if self.send_file(local_path):
+                            self.log(f"   ✅ PDF推送成功")
+                            return True
+                        else:
+                            self.log(f"   ⚠️ PDF推送失败，尝试重新生成")
+                            break
+            
+            # 没有现成的 PDF，需要生成
             self.log(f"📄 第{index}/{total}条：检测到文章链接，开始转换PDF...")
             
             # 获取PDF输出目录
@@ -862,31 +878,22 @@ class WeComWebhook:
                 article_url, 
                 pdf_output_dir, 
                 title,
-                cookie=crawler.cookie  # ✅ 传入知识星球Cookie
+                cookie=crawler.cookie
             )
             
             if pdf_path:
-                # ⭐ 添加水印模板（用临时文件作为中间输出，然后覆盖原文件）
+                # 添加水印模板
                 temp_pdf_path = pdf_path.replace('.pdf', '_temp.pdf')
                 if self._merge_with_template(pdf_path, temp_pdf_path):
-                    # 用临时文件覆盖原文件
                     import shutil
                     shutil.move(temp_pdf_path, pdf_path)
                     self.log(f"   📋 已添加水印模板")
-                    # 发送带水印的PDF
-                    if self.send_file(pdf_path):
-                        self.log(f"   ✅ PDF发送成功")
-                        return True
-                    else:
-                        self.log(f"   ⚠️ PDF发送失败")
+                
+                if self.send_file(pdf_path):
+                    self.log(f"   ✅ PDF发送成功")
+                    return True
                 else:
-                    # 水印添加失败，直接发送原始PDF
-                    self.log(f"   ⚠️ 水印添加失败，发送原始PDF")
-                    if self.send_file(pdf_path):
-                        self.log(f"   ✅ PDF发送成功")
-                        return True
-                    else:
-                        self.log(f"   ⚠️ PDF发送失败")
+                    self.log(f"   ⚠️ PDF发送失败")
             else:
                 self.log(f"   ⚠️ PDF转换失败")
             
@@ -894,6 +901,7 @@ class WeComWebhook:
         except Exception as e:
             self.log(f"   ❌ PDF处理异常: {e}")
             return False
+
     
     def _handle_attachments(self, index: int, topic_files: List[Dict], title: str, crawler, total: int) -> bool:
         """处理附件下载和推送（分支2）"""
