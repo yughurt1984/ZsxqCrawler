@@ -659,6 +659,46 @@ class ApiClient {
       body: JSON.stringify(params || {}),
     });
   }
+
+  // 定时爬取相关 API——新增功能
+
+  // 获取定时爬取状态
+  async getScheduledCrawlStatus(groupId: number | string): Promise<{
+    running: boolean;
+    task_id?: string;
+    next_run_time?: string;
+    interval_minutes?: number;
+  }> {
+    return this.request(`/api/crawl/scheduled/${groupId}/status`);
+  }
+
+  // 启动定时爬取
+  async startScheduledCrawl(groupId: number | string, settings: {
+    intervalMinutes: number;
+    crawlIntervalMin?: number;
+    crawlIntervalMax?: number;
+    longSleepIntervalMin?: number;
+    longSleepIntervalMax?: number;
+    pagesPerBatch?: number;
+  }): Promise<{
+    task_id: string;
+    message: string;
+  }> {
+    return this.request(`/api/crawl/scheduled/${groupId}/start`, {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    });
+  }
+
+  // 停止定时爬取
+  async stopScheduledCrawl(groupId: number | string) {
+    return this.request(`/api/crawl/scheduled/${groupId}/stop`, {
+      method: 'POST',
+    });
+  }
+
+
+
   // 删除社群本地数据
   async deleteGroup(groupId: number | string) {
     return this.request(`/api/groups/${groupId}`, {

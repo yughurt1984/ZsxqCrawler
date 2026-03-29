@@ -253,6 +253,23 @@ class ZSXQDatabase:
             )
         ''')
 
+        # 数据库迁移：为 images 表添加 source 字段
+        try:
+            self.cursor.execute("SELECT source FROM images LIMIT 1")
+        except sqlite3.OperationalError:
+            # source 字段不存在，添加它
+            self.cursor.execute("ALTER TABLE images ADD COLUMN source TEXT DEFAULT 'talk'")
+            # 将现有数据根据 comment_id 设置 source
+            self.cursor.execute("UPDATE images SET source = 'comment' WHERE comment_id IS NOT NULL")
+            self.cursor.execute("UPDATE images SET source = 'talk' WHERE comment_id IS NULL")
+        
+        # 数据库迁移：为 topic_files 表添加 local_path 字段
+        try:
+            self.cursor.execute("SELECT local_path FROM topic_files LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute('ALTER TABLE topic_files ADD COLUMN local_path TEXT')
+            print("✅ 数据库迁移：topic_files 表添加 local_path 字段")
+            
         self.conn.commit()
     
     def import_topic_data(self, topic_data: Dict[str, Any]) -> bool:
@@ -614,49 +631,72 @@ class ZSXQDatabase:
     
     def _import_images(self, topic_id: int, topic_data: Dict[str, Any]):
         """导入图片信息"""
-        images_to_import = []
-        
+        images_to_import = []  # (image_data, comment_id, source)
+
         # 从talk中获取图片
         if 'talk' in topic_data and topic_data['talk'] and 'images' in topic_data['talk']:
             for img in topic_data['talk']['images']:
-                images_to_import.append((img, None))  # (image_data, comment_id)
-        
+                images_to_import.append((img, None, 'talk'))
+
+        # 🆕 从question中获取图片（问答类型话题的提问图片）
+        if 'question' in topic_data and topic_data['question'] and 'images' in topic_data['question']:
+            for img in topic_data['question']['images']:
+                images_to_import.append((img, None, 'question'))
+
+        # 🆕 从answer中获取图片（问答类型话题的回答图片）
+        if 'answer' in topic_data and topic_data['answer'] and 'images' in topic_data['answer']:
+            for img in topic_data['answer']['images']:
+                images_to_import.append((img, None, 'answer'))
+
         # 从comments中获取图片
         if 'show_comments' in topic_data:
             for comment in topic_data['show_comments']:
                 if 'images' in comment:
                     comment_id = comment.get('comment_id')
                     for img in comment['images']:
-                        images_to_import.append((img, comment_id))
-        
+                        images_to_import.append((img, comment_id, 'comment'))
+
         # 导入所有图片
-        for img_data, comment_id in images_to_import:
-            self._upsert_image(topic_id, img_data, comment_id)
+        for img_data, comment_id, source in images_to_import:
+            self._upsert_image(topic_id, img_data, comment_id, source)
+
     
-    def _upsert_image(self, topic_id: int, image_data: Dict[str, Any], comment_id: Optional[int] = None):
-        """插入或更新图片信息"""
+    def _upsert_image(self, topic_id: int, image_data: Dict[str, Any], comment_id: Optional[int] = None, source: str = 'talk'):
+        """插入或更新图片信息
+        
+        Args:
+            topic_id: 话题ID
+            image_data: 图片数据
+            comment_id: 评论ID（如果是评论图片）
+            source: 图片来源，可选值：'talk', 'question', 'answer', 'comment'
+        """
         image_id = image_data.get('image_id')
         if not image_id:
             return
-        
+
         thumbnail = image_data.get('thumbnail', {})
         large = image_data.get('large', {})
         original = image_data.get('original', {})
-        
+
         # 获取当前时间作为created_at（使用东八区时间格式）
         from datetime import datetime, timezone, timedelta
         beijing_tz = timezone(timedelta(hours=8))
         current_time = datetime.now(beijing_tz).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-        
+
+        # 如果有 comment_id，自动设置 source 为 'comment'
+        if comment_id is not None:
+            source = 'comment'
+
         self.cursor.execute('''
-            INSERT OR REPLACE INTO images 
-            (image_id, topic_id, comment_id, type, thumbnail_url, thumbnail_width, thumbnail_height,
+            INSERT OR REPLACE INTO images
+            (image_id, topic_id, comment_id, source, type, thumbnail_url, thumbnail_width, thumbnail_height,
              large_url, large_width, large_height, original_url, original_width, original_height, original_size, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             image_id,
             topic_id,
             comment_id,
+            source,
             image_data.get('type', ''),
             thumbnail.get('url', ''),
             thumbnail.get('width'),
@@ -998,6 +1038,49 @@ class ZSXQDatabase:
                 current_time
             ))
 
+    
+    def insert_pdf_file(self, topic_id: int, pdf_name: str, pdf_path: str, pdf_size: int) -> bool:
+        """
+        插入 PDF 文件记录到 topic_files 表
+        
+        Args:
+            topic_id: 话题ID
+            pdf_name: PDF 文件名
+            pdf_path: PDF 完整路径
+            pdf_size: PDF 文件大小
+        
+        Returns:
+            是否插入成功
+        """
+        try:
+            from datetime import datetime, timezone, timedelta
+            beijing_tz = timezone(timedelta(hours=8))
+            current_time = datetime.now(beijing_tz).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
+            
+            # 计算文件 hash
+            import hashlib
+            with open(pdf_path, 'rb') as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
+            
+            self.cursor.execute('''
+                INSERT INTO topic_files 
+                (topic_id, file_id, name, hash, size, create_time, local_path, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (
+                topic_id,
+                -1,  # 本地生成的 PDF，使用 -1 标识
+                pdf_name,
+                file_hash,
+                pdf_size,
+                current_time,
+                pdf_path
+            ))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"   ⚠️ 插入 PDF 记录失败: {e}")
+            return False
+
 
     def get_topic_detail(self, topic_id: int):
         """获取完整的话题详情"""
@@ -1081,7 +1164,7 @@ class ZSXQDatabase:
                         large_url, large_width, large_height,
                         original_url, original_width, original_height, original_size
                     FROM images
-                    WHERE topic_id = ? AND comment_id IS NULL
+                    WHERE topic_id = ? AND source = 'talk'
                     ORDER BY image_id
                 ''', (topic_id,))
 
@@ -1114,7 +1197,7 @@ class ZSXQDatabase:
                 # 获取话题文件
                 self.cursor.execute('''
                     SELECT
-                        file_id, name, hash, size, duration, download_count, create_time
+                        file_id, name, hash, size, duration, download_count, create_time, local_path
                     FROM topic_files
                     WHERE topic_id = ?
                     ORDER BY file_id
@@ -1122,7 +1205,7 @@ class ZSXQDatabase:
 
                 files = []
                 for file_row in self.cursor.fetchall():
-                    files.append({
+                    file_data = {
                         "file_id": file_row[0],
                         "name": file_row[1],
                         "hash": file_row[2],
@@ -1130,10 +1213,15 @@ class ZSXQDatabase:
                         "duration": file_row[4],
                         "download_count": file_row[5],
                         "create_time": file_row[6]
-                    })
+                    }
+                    # 添加 local_path（如果存在）
+                    if file_row[7]:  # local_path
+                        file_data["local_path"] = file_row[7]
+                    files.append(file_data)
 
                 if files:
                     talk_data["files"] = files
+
 
                 # 读取文章信息（如有）
                 self.cursor.execute('''
@@ -1356,6 +1444,44 @@ class ZSXQDatabase:
                             "description": question_row[11]
                         }
 
+                    # 🆕 获取问题的图片
+                    self.cursor.execute('''
+                        SELECT
+                            image_id, type, thumbnail_url, thumbnail_width, thumbnail_height,
+                            large_url, large_width, large_height,
+                            original_url, original_width, original_height, original_size
+                        FROM images
+                        WHERE topic_id = ? AND source = 'question'
+
+                        ORDER BY image_id
+                    ''', (topic_id,))
+
+                    question_images = []
+                    for img_row in self.cursor.fetchall():
+                        question_images.append({
+                            "image_id": img_row[0],
+                            "type": img_row[1],
+                            "thumbnail": {
+                                "url": img_row[2],
+                                "width": img_row[3],
+                                "height": img_row[4]
+                            },
+                            "large": {
+                                "url": img_row[5],
+                                "width": img_row[6],
+                                "height": img_row[7]
+                            },
+                            "original": {
+                                "url": img_row[8],
+                                "width": img_row[9],
+                                "height": img_row[10],
+                                "size": img_row[11]
+                            }
+                        })
+
+                    if question_images:
+                        question_data["images"] = question_images
+
                     topic_detail["question"] = question_data
 
                 # 获取回答信息
@@ -1365,7 +1491,7 @@ class ZSXQDatabase:
                         u.user_id, u.name, u.alias, u.avatar_url, u.location, u.description
                     FROM answers a
                     LEFT JOIN users u ON a.owner_user_id = u.user_id
-                    WHERE a.topic_id = ?
+                    WHERE topic_id = ? 
                     LIMIT 1
                 ''', (topic_id,))
 
@@ -1382,6 +1508,42 @@ class ZSXQDatabase:
                             "description": answer_row[6]
                         }
                     }
+                    # 🆕 获取回答的图片
+                    self.cursor.execute('''
+                        SELECT
+                            image_id, type, thumbnail_url, thumbnail_width, thumbnail_height,
+                            large_url, large_width, large_height,
+                            original_url, original_width, original_height, original_size
+                        FROM images
+                        WHERE topic_id = ? AND source = 'answer'
+                        ORDER BY image_id
+                    ''', (topic_id,))
+
+                    answer_images = []
+                    for img_row in self.cursor.fetchall():
+                        answer_images.append({
+                            "image_id": img_row[0],
+                            "type": img_row[1],
+                            "thumbnail": {
+                                "url": img_row[2],
+                                "width": img_row[3],
+                                "height": img_row[4]
+                            },
+                            "large": {
+                                "url": img_row[5],
+                                "width": img_row[6],
+                                "height": img_row[7]
+                            },
+                            "original": {
+                                "url": img_row[8],
+                                "width": img_row[9],
+                                "height": img_row[10],
+                                "size": img_row[11]
+                            }
+                        })
+
+                    if answer_images:
+                        answer_data["images"] = answer_images
                     topic_detail["answer"] = answer_data
 
             return topic_detail

@@ -14,6 +14,17 @@ from zsxq_file_downloader import ZSXQFileDownloader
 from db_path_manager import get_db_path_manager
 import os
 import argparse
+import hashlib
+from xhtml2pdf import pisa
+from io import BytesIO
+from bs4 import BeautifulSoup  # 新增：用于解析HTML
+
+
+import re
+from urllib.parse import urlparse
+
+
+
 try:
     import tomllib
 except ImportError:
@@ -29,7 +40,7 @@ class ZSXQInteractiveCrawler:
     """知识星球交互式数据采集器"""
     def __init__(self, cookie: str, group_id: str, db_path: str = None, 
              log_callback=None, wecom_webhook_url: str = None, 
-             wecom_enabled: bool = True):
+             wecom_enabled: bool = True, pdf_config: dict = None):
         self.cookie = self.clean_cookie(cookie)
         self.group_id = group_id
         self.log_callback = log_callback  # 日志回调函数
@@ -53,7 +64,7 @@ class ZSXQInteractiveCrawler:
         if wecom_webhook_url:
             try:
                 from wecom_webhook import WeComWebhook
-                self.wecom_webhook = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled)
+                self.wecom_webhook = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled, log_callback=self.log)
                 self.log("📱 企业微信Webhook已启用")
             except ImportError:
                 self.log("⚠️ 未找到wecom_webhook模块，webhook推送功能不可用")
@@ -189,6 +200,14 @@ class ZSXQInteractiveCrawler:
         except Exception as e:
             print(f"Cookie清理失败: {e}")
             return cookie  # 返回原始值
+        
+    def format_file_size(self, size_bytes: int) -> str:
+        """格式化文件大小"""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.2f} TB"
     
     def get_file_downloader(self):
         """获取文件下载器（懒加载）"""
@@ -684,6 +703,10 @@ class ZSXQInteractiveCrawler:
                 # 导入数据
                 self.db.import_topic_data(topic_data)
 
+                # 🆕 检测并处理 inline_article_url（文字 + PDF）
+                self._process_inline_article(topic_data, topic_id)
+
+
                 # 检查是否需要获取更多评论
                 comments_count = topic_data.get('comments_count', 0)
                 if comments_count > 8:
@@ -711,6 +734,279 @@ class ZSXQInteractiveCrawler:
         # 提交事务
         self.db.conn.commit()
         return stats
+
+    # ==================== 文章内容处理相关方法 ====================
+    def _process_inline_article(self, topic_data: Dict, topic_id: int) -> bool:
+        """
+        处理内嵌文章链接：爬取内容并生成 PDF
+        
+        Args:
+            topic_data: 话题数据
+            topic_id: 话题ID
+        
+        Returns:
+            是否成功处理
+        """
+        talk_data = topic_data.get('talk', {})
+        article_info = talk_data.get('article', {})
+        inline_article_url = article_info.get('inline_article_url', '')
+        
+        if not inline_article_url:
+            return False
+        
+        try:
+            self.log(f"   📄 检测到文章链接，开始处理...")
+            
+            # 1. 爬取 HTML 内容
+            html_content = self._fetch_article_html(inline_article_url)
+            if not html_content:
+                self.log(f"   ⚠️ 获取 HTML 内容失败")
+                return False
+                        
+            # 2. 生成 PDF
+            pdf_path = self._generate_article_pdf(
+                html_content=html_content,
+                topic_id=topic_id,
+                title=topic_data.get('title') or article_info.get('title', '')
+            )
+            
+            if pdf_path:
+            # 3. 插入 PDF 记录到 topic_files
+                pdf_size = os.path.getsize(pdf_path)
+                pdf_name = os.path.basename(pdf_path)
+                
+                if self.db.insert_pdf_file(topic_id, pdf_name, pdf_path, pdf_size):
+                    self.log(f"   ✅ PDF 附件已保存: {pdf_name}")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            self.log(f"   ⚠️ 文章处理失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+
+    def _fetch_article_html(self, url: str) -> Optional[str]:
+        """
+        爬取文章链接的 HTML 内容
+        
+        Args:
+            url: 文章链接
+        
+        Returns:
+            HTML 内容字符串，失败返回 None
+        """
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            }
+            
+            # 判断域名类型
+            parsed_url = urlparse(url)
+            domain = parsed_url.netloc
+            
+            if "zsxq.com" in domain:
+                self.log(f"   🔗 检测到知识星球域名")
+                headers["Cookie"] = self.cookie
+                headers["Referer"] = "https://wx.zsxq.com/"
+            
+            response = self.session.get(url, headers=headers, timeout=30)
+            response.encoding = response.apparent_encoding
+            
+            self.log(f"   ✅ 获取到 HTML 内容: {len(response.text)} 字符")
+            return response.text
+            
+        except Exception as e:
+            self.log(f"   ⚠️ 爬取 HTML 失败: {e}")
+            return None
+
+    def _generate_article_pdf(self, html_content: str, topic_id: int, title: str) -> Optional[str]:
+        """
+        生成文章 PDF 文件
+        
+        Args:
+            html_content: HTML 内容
+            topic_id: 话题ID
+            title: 文章标题
+        
+        Returns:
+            PDF 文件路径，失败返回 None
+        """
+        try:
+            # 获取 PDF 输出目录
+            pdf_output_dir = self._get_pdf_output_dir()
+            
+            # 生成文件名
+            if title and title.strip():
+                safe_title = re.sub(r'[^\w\s\u4e00-\u9fff]', '', title.strip())
+                safe_title = re.sub(r'\s+', '', safe_title)
+                if len(safe_title) > 100:
+                    safe_title = safe_title[:100]
+                pdf_filename = f"{safe_title}_添加作者微信MK0914666.pdf"
+            else:
+                pdf_filename = f"article_{topic_id}_添加作者微信MK0914666.pdf"
+            
+            pdf_path = os.path.join(pdf_output_dir, pdf_filename)
+            
+            # 检查是否已存在
+            if os.path.exists(pdf_path):
+                self.log(f"   ✅ PDF 已存在: {pdf_filename}")
+                return pdf_path
+            
+            # 处理 HTML
+            processed_html = self._process_html_for_pdf(html_content)
+            
+            # 生成 PDF
+            with open(pdf_path, 'wb') as pdf_file:
+                pisa_status = pisa.CreatePDF(
+                    src=BytesIO(processed_html.encode('utf-8')),
+                    dest=pdf_file,
+                    encoding='utf-8'
+                )
+            
+            if pisa_status.err:
+                self.log(f"   ⚠️ PDF 生成有异常: {pisa_status.err}")
+            else:
+                self.log(f"   ✅ PDF 生成成功: {pdf_filename}")
+            
+            return pdf_path
+            
+        except Exception as e:
+            self.log(f"   ⚠️ PDF 生成失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+
+    def _get_pdf_output_dir(self) -> str:
+        """获取 PDF 输出目录"""
+        path_manager = get_db_path_manager()
+        group_dir = path_manager.get_group_dir(self.group_id)
+        pdf_dir = os.path.join(group_dir, 'downloads')
+        
+        os.makedirs(pdf_dir, exist_ok=True)
+        return pdf_dir
+
+
+    def _process_html_for_pdf(self, html_content: str) -> str:
+        """
+        处理 HTML 以适合 PDF 生成
+        
+        Args:
+            html_content: 原始 HTML
+        
+        Returns:
+            处理后的 HTML
+        """
+        import textwrap
+        
+        # 调整图片样式
+        def add_responsive_style(match):
+            tag = match.group(0)
+            if 'style="' in tag:
+                return tag.replace('style="', 'style="max-width: 100%; height: auto; ')
+            elif "style='" in tag:
+                return tag.replace("style='", "style='max-width: 100%; height: auto; ")
+            else:
+                if ' src="' in tag:
+                    return tag.replace(' src="', ' style="max-width: 100%; height: auto;" src="')
+                elif " src='" in tag:
+                    return tag.replace(" src='", " style='max-width: 100%; height: auto;' src='")
+                else:
+                    return tag.replace('>', ' style="max-width: 100%; height: auto;">')
+            return tag
+        
+        html_content = re.sub(r'<img[^>]+>', add_responsive_style, html_content, flags=re.IGNORECASE)
+        
+        # 清理多余内容
+        html_content = re.sub(r'<div[^>]*milkdown-preview[^>]*>.*?</div>', '', html_content, flags=re.DOTALL)
+        html_content = re.sub(r'<\?xml[^>]*\?>\s*', '', html_content)
+        html_content = re.sub(r'<!DOCTYPE[^>]*>\s*', '', html_content)
+        html_content = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n' + html_content
+        
+        # ⭐ 文本换行处理（与 webhook 保持一致）
+        html_content = self._html_wrap_content(html_content, width=46)
+        
+        # ⭐ 清理 HTML 结构（与 webhook 保持一致）
+        html_content = re.sub(r'<p>\s*</p>', '', html_content)
+        html_content = re.sub(r'<p([^>]*)>\s*(<img[^>]+>)\s*</p>', r'\2', html_content, flags=re.IGNORECASE)
+        html_content = re.sub(r'</p>\s*<p>', '<br>', html_content)
+        html_content = re.sub(r'(<br>\s*){2,}', '<br>', html_content)
+        
+        # 注入 CSS
+        css = '''
+            <style>
+                @page { size: A4; margin: 2cm; }
+                body { 
+                    font-family: STSong-Light, SimSun,Times New Roman, Arial, sans-serif; 
+                    line-height: 1.6; 
+                    margin: 0; 
+                    padding: 15px; 
+                    font-size: 12pt; 
+                    word-wrap: break-word; 
+                    word-break: break-word;
+                }
+                img { max-width: 100% !important; height: auto !important; display: block; margin: 10px 0; }
+                p, div { margin: 0.1em 0; padding: 0.2em 0; word-wrap: break-word; overflow-wrap: break-word; }
+                pre, code { white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; }
+                table { max-width: 100%; word-wrap: break-word; }
+                h1, h2, h3, h4, h5, h6 { margin: 1em 0 0.5em 0; font-weight: bold; word-wrap: break-word; }
+            </style>
+        '''
+        
+        if '<head>' in html_content:
+            html_content = html_content.replace('<head>', f'<head>{css}')
+        elif '<html>' in html_content:
+            html_content = html_content.replace('<html>', f'<html><head>{css}</head>')
+        else:
+            html_content = f'<html><head>{css}</head><body>{html_content}</body></html>'
+        
+        return html_content
+
+
+    def _html_wrap_content(self, html_content: str, width: int = 46) -> str:
+        """
+        对 HTML 中的文本内容进行换行处理，链接单独一行显示
+        避免 PDF 生成时文本溢出（与 webhook 保持一致）
+        """
+        try:
+            import textwrap
+            parts = re.split(r'(<[^>]+>)', html_content)
+            result = []
+            
+            for part in parts:
+                if part.startswith('<') and part.endswith('>'):
+                    # 已经是HTML标签，检查是否是<a>标签
+                    if part.startswith('<a ') or part.startswith('</a>'):
+                        # 链接标签前后添加换行
+                        result.append('<br>' + part + '<br>')
+                    else:
+                        result.append(part)
+                else:
+                    if part.strip():
+                        # 处理纯文本中的URL（非<a>标签包裹的链接）
+                        part = re.sub(r'(https?://[^\s<>"\'\)]+)', r'<br>\1<br>', part)
+                        
+                        # 普通文本换行
+                        wrapped = textwrap.fill(part, width=width)
+                        result.append(wrapped.replace('\n', '<br>'))
+                    else:
+                        result.append(part)
+            
+            # 清理多余的连续<br>
+            html_result = ''.join(result)
+            html_result = re.sub(r'(<br>\s*){2,}', '<br>', html_result)
+            
+            return html_result
+        except Exception as e:
+            self.log(f"   ⚠️ 文本换行处理失败: {e}")
+            return html_content
+
+
     
     def crawl_latest(self, count: int = 20) -> Dict[str, int]:
         """爬取最新话题"""
@@ -736,7 +1032,7 @@ class ZSXQInteractiveCrawler:
             # 企业微信推送
             if self.wecom_webhook and new_topics:  # ✅ 使用new_topics列表判断
                 self.log(f"📱 准备推送企业微信通知，共{len(new_topics)}个新话题...")
-                success = self.wecom_webhook.send_new_topics_notification(new_topics, stats)
+                success = self.wecom_webhook.send_new_topics_notification(new_topics, stats, crawler=self)
                 if success:
                     self.log("✅ 企业微信推送成功")
                 else:
@@ -1351,7 +1647,22 @@ class ZSXQInteractiveCrawler:
                          # ✅ 添加：企业微信推送（在返回前）
                         if self.wecom_webhook and all_new_topics:
                             self.log(f"📱 准备推送企业微信通知，共{len(all_new_topics)}个新话题...")
-                            success = self.wecom_webhook.send_new_topics_notification(all_new_topics, total_stats)
+                            
+                            # ✅ 从数据库查询完整的topic信息（包含article字段）
+                            enhanced_new_topics = []
+                            for topic in all_new_topics:
+                                topic_id = topic.get('topic_id')
+                                if topic_id:
+                                    # 从数据库查询完整的topic详情
+                                    full_topic_detail = self.db.get_topic_detail(topic_id)
+                                    if full_topic_detail:
+                                        enhanced_new_topics.append(full_topic_detail)
+                                    else:
+                                        # 如果查询失败，使用原始数据
+                                        enhanced_new_topics.append(topic)
+                                        self.log(f"   ⚠️ 话题{topic_id}查询详情失败，使用原始数据")
+                            
+                            success = self.wecom_webhook.send_new_topics_notification(all_new_topics, total_stats, crawler=self)
                             if success:
                                 self.log("✅ 企业微信推送成功")
                             else:
@@ -1385,6 +1696,9 @@ class ZSXQInteractiveCrawler:
                                 
                                 # 导入数据
                                 self.db.import_topic_data(new_topic)
+                                
+                                # 🆕 检测并处理 inline_article_url（文字 + PDF）
+                                self._process_inline_article(new_topic, topic_id)
                                 
                                 if exists:
                                     updated_topics_count += 1

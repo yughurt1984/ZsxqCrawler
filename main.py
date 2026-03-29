@@ -20,6 +20,8 @@ import uvicorn
 import mimetypes
 import random
 import time
+from datetime import timedelta
+
 
 # 添加项目根目录到Python路径（现在main.py就在根目录）
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -110,7 +112,7 @@ def _safe_listdir(path: str):
 
 def _collect_numeric_dirs(base: str, limit: int) -> set:
     """
-    扫描 base 的一级子目录，收集纯数字目录名（^\d+$）作为群ID。
+    扫描 base 的一级子目录，收集纯数字目录名（^\\d+$）作为群ID。
     忽略：非目录、软链接、隐藏目录（以 . 开头）。
     """
     ids = set()
@@ -1474,6 +1476,161 @@ def fetch_groups_from_api(cookie: str) -> List[dict]:
         raise Exception(f"网络请求失败: {str(e)}")
     except Exception as e:
         raise Exception(f"获取群组列表失败: {str(e)}")
+
+
+# 定时爬取相关数据结构
+class ScheduledCrawlRequest(BaseModel):
+    intervalMinutes: int = Field(..., ge=1, description="爬取间隔（分钟）")
+    crawlIntervalMin: float = Field(2, ge=0, description="最小爬取间隔（秒）")
+    crawlIntervalMax: float = Field(5, ge=0, description="最大爬取间隔（秒）")
+    longSleepIntervalMin: float = Field(180, ge=0, description="长休眠最小间隔（秒）")
+    longSleepIntervalMax: float = Field(300, ge=0, description="长休眠最大间隔（秒）")
+    pagesPerBatch: int = Field(15, ge=1, description="每批次爬取页数")
+
+# 全局定时任务字典：{group_id: {task_id, interval, running}}
+scheduled_tasks: Dict[str, Dict[str, Any]] = {}
+
+@app.get("/api/crawl/scheduled/{group_id}/status")
+async def get_scheduled_crawl_status(group_id: str):
+    """获取定时爬取状态"""
+    if group_id not in scheduled_tasks:
+        return {"running": False, "task_id": None, "interval_minutes": None}
+    
+    task_info = scheduled_tasks[group_id]
+    return {
+        "running": task_info.get("running", False),
+        "task_id": task_info.get("task_id"),
+        "interval_minutes": task_info.get("interval_minutes"),
+        "next_run_time": task_info.get("next_run_time")
+    }
+
+@app.post("/api/crawl/scheduled/{group_id}/start")
+async def start_scheduled_crawl(group_id: str, request: ScheduledCrawlRequest, background_tasks: BackgroundTasks):
+    """启动定时爬取任务"""
+    try:
+        # 如果已有定时任务在运行，先停止
+        if group_id in scheduled_tasks and scheduled_tasks[group_id].get("running", False):
+            return {"error": "定时任务已在运行中"}
+        
+        task_id = create_task("scheduled_crawl", f"定时爬取任务 (群组: {group_id}, 间隔: {request.intervalMinutes}分钟)")
+        
+        async def run_scheduled_task(task_id: str, group_id: str, request: ScheduledCrawlRequest):
+            try:
+                update_task(task_id, "running", "开始定时爬取...")
+                add_task_log(task_id, f"⏱️ 定时爬取已启动，间隔: {request.intervalMinutes}分钟")
+                
+                # 记录定时任务信息
+                scheduled_tasks[group_id] = {
+                    "running": True,
+                    "task_id": task_id,
+                    "interval_minutes": request.intervalMinutes,
+                    "next_run_time": datetime.now().isoformat()
+                }
+                
+                # 创建日志回调函数
+                def log_callback(message):
+                    add_task_log(task_id, message)
+                
+                # 设置停止检查函数
+                def stop_check():
+                    return is_task_stopped(task_id) or not scheduled_tasks.get(group_id, {}).get("running", False)
+                
+                # 获取账号cookie
+                cookie = get_cookie_for_group(group_id)
+                path_manager = get_db_path_manager()
+                db_path = path_manager.get_topics_db_path(group_id)
+                
+                 # ✅ 添加：读取企业微信webhook配置
+                config = load_config()
+                wecom_webhook_url = None
+                wecom_enabled = True
+                if config:
+                    wecom_config = config.get('wecom_webhook', {})
+                    if isinstance(wecom_config, dict):
+                        wecom_webhook_url = wecom_config.get('webhook_url')
+                        wecom_enabled = wecom_config.get('enabled', True)
+                
+                # 创建爬虫实例
+                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback,wecom_webhook_url=wecom_webhook_url, wecom_enabled=wecom_enabled)
+                crawler.stop_check_func = stop_check
+                
+                # 设置爬取间隔参数
+                crawler.crawl_interval_min = request.crawlIntervalMin
+                crawler.crawl_interval_max = request.crawlIntervalMax
+                crawler.long_sleep_interval_min = request.longSleepIntervalMin
+                crawler.long_sleep_interval_max = request.longSleepIntervalMax
+                crawler.pages_per_batch = request.pagesPerBatch
+                
+                # 定时循环
+                while not stop_check():
+                    add_task_log(task_id, f"🔄 执行定时爬取... ")
+                    
+                    # 执行一次"获取最新"爬取
+                    try:
+                        result = crawler.crawl_latest_until_complete()
+                        add_task_log(task_id, f"✅ 本次爬取完成，获取话题数: {result}")
+                    except Exception as e:
+                        add_task_log(task_id, f"❌ 本次爬取失败: {str(e)}")
+                    
+                    # 更新下次运行时间
+                    if not stop_check():
+                        # 计算随机等待时间：随机区间为（t-1, t）分钟
+                        random_wait = random.uniform(request.intervalMinutes - 1, request.intervalMinutes)
+                        wait_minutes = int(random_wait)
+                        
+                        # 计算下一次运行时间
+                        next_run_time = datetime.now() + timedelta(minutes=wait_minutes)
+                        next_run_str = next_run_time.strftime('%H:%M:%S')
+                        
+                        # 输出等待提示
+                        wait_minutes = request.intervalMinutes
+                        add_task_log(task_id, f"⏸️ 等待 {wait_minutes} 分钟直到下一次爬取...")
+                        add_task_log(task_id, f"⏰ 下一次运行时间: {next_run_str}")
+                        
+                        await asyncio.sleep(request.intervalMinutes * 60)
+                        scheduled_tasks[group_id]["next_run_time"] = datetime.now().isoformat()
+                
+                # 任务结束
+                update_task(task_id, "completed", "定时爬取任务已停止")
+                add_task_log(task_id, "⏹️ 定时爬取任务已停止")
+                scheduled_tasks[group_id]["running"] = False
+                
+            except Exception as e:
+                update_task(task_id, "failed", f"定时爬取任务失败: {str(e)}")
+                add_task_log(task_id, f"❌ 错误: {str(e)}")
+                if group_id in scheduled_tasks:
+                    scheduled_tasks[group_id]["running"] = False
+        
+        # 添加后台任务
+        background_tasks.add_task(run_scheduled_task, task_id, group_id, request)
+        
+        return {"task_id": task_id, "message": "定时任务已启动"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"启动定时任务失败: {str(e)}")
+
+@app.post("/api/crawl/scheduled/{group_id}/stop")
+async def stop_scheduled_crawl(group_id: str):
+    """停止定时爬取任务"""
+    try:
+        if group_id not in scheduled_tasks:
+            return {"message": "没有运行的定时任务"}
+        
+        task_info = scheduled_tasks[group_id]
+        if task_info.get("running", False):
+            task_id = task_info.get("task_id")
+            # 停止任务
+            stop_task(task_id)
+            
+            # 更新状态
+            scheduled_tasks[group_id]["running"] = False
+            
+            return {"message": "定时任务已停止"}
+        else:
+            return {"message": "定时任务未在运行"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"停止定时任务失败: {str(e)}")
+
+
 
 # 爬取相关API路由
 @app.post("/api/crawl/historical/{group_id}")
@@ -3114,6 +3271,7 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
                 LEFT JOIN talks tk ON t.topic_id = tk.topic_id
                 LEFT JOIN users u ON tk.owner_user_id = u.user_id
                 WHERE t.group_id = ? AND (t.title LIKE ? OR q.text LIKE ? OR tk.text LIKE ?)
+                GROUP BY t.topic_id  -- ✅ 添加去重
                 ORDER BY t.create_time DESC
                 LIMIT ? OFFSET ?
             """
@@ -3133,6 +3291,7 @@ async def get_group_topics(group_id: int, page: int = 1, per_page: int = 20, sea
                 LEFT JOIN talks tk ON t.topic_id = tk.topic_id
                 LEFT JOIN users u ON tk.owner_user_id = u.user_id
                 WHERE t.group_id = ?
+                GROUP BY t.topic_id  -- ✅ 添加去重
                 ORDER BY t.create_time DESC
                 LIMIT ? OFFSET ?
             """
@@ -3845,6 +4004,31 @@ def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRa
                         last_time_dt_in_page = dt  # 该页数据按时间降序；循环结束后持有最后（最老）时间
                         if start_dt <= dt <= end_dt:
                             filtered.append(t)
+                            
+                # ✅ 添加调试日志
+                if topics:
+                    first_topic_time = topics[0].get('create_time')
+                    last_topic_time = topics[-1].get('create_time')
+                    add_task_log(task_id, f"📄 本页时间范围: {first_topic_time} ~ {last_topic_time}")
+                    add_task_log(task_id, f"🔍 时间过滤结果: 本页{len(topics)}条, 过滤后{len(filtered)}条")
+                    
+                    if filtered:
+                        filtered_first = filtered[0].get('create_time')
+                        filtered_last = filtered[-1].get('create_time')
+                        add_task_log(task_id, f"✅ 过滤后范围: {filtered_first} ~ {filtered_last}")
+                    else:
+                        # 判断为什么过滤为空
+                        try:
+                            last_time_str = topics[-1].get('create_time')
+                            if last_time_str:
+                                last_time_fixed = last_time_str.replace('+0800', '+08:00') if last_time_str.endswith('+0800') else last_time_str
+                                last_dt = datetime.fromisoformat(last_time_fixed)
+                                if last_dt < start_dt:
+                                    add_task_log(task_id, f"⚠️ 过滤为空原因: 本页最老时间({last_dt.strftime('%Y-%m-%d %H:%M')})早于开始时间({start_dt.strftime('%Y-%m-%d %H:%M')})")
+                                else:
+                                    add_task_log(task_id, f"⚠️ 过滤为空原因: 本页数据晚于结束时间，继续爬取更早数据")
+                        except Exception as e:
+                            add_task_log(task_id, f"⚠️ 时间解析异常: {e}")
 
                 # 仅导入时间范围内的数据
                 if filtered:
@@ -3854,22 +4038,39 @@ def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRa
                     total_stats['updated_topics'] += page_stats.get('updated_topics', 0)
                     total_stats['errors'] += page_stats.get('errors', 0)
 
+                    # 计算下一页的 end_time（使用该页最老话题时间 - 偏移毫秒）
+                    oldest_in_page = filtered[-1].get('create_time')  # ✅ 使用过滤后列表
+                    try:
+                        dt_oldest = datetime.fromisoformat(oldest_in_page.replace('+0800', '+08:00'))
+                        dt_oldest = dt_oldest - timedelta(milliseconds=crawler.timestamp_offset_ms)
+                        end_time_param = dt_oldest.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
+                    except Exception:
+                        end_time_param = oldest_in_page
+                else:
+                    # 如果没有过滤后的数据，需要判断原因
+                    # 情况1: 所有数据都早于开始时间 → 结束爬取
+                    # 情况2: 所有数据都晚于结束时间 → 继续爬取更早数据
+                    oldest_in_page = topics[-1].get('create_time')
+                    try:
+                        dt_oldest = datetime.fromisoformat(oldest_in_page.replace('+0800', '+08:00'))
+                        last_time_dt_in_page = dt_oldest
+                        
+                        # ✅ 判断：如果最老时间早于开始时间，结束；否则继续爬取
+                        if dt_oldest < start_dt:
+                            add_task_log(task_id, f"🛑 已到达起始时间之前，任务结束")
+                            break
+                        else:
+                            # 数据晚于结束时间，继续爬取更早数据
+                            dt_oldest = dt_oldest - timedelta(milliseconds=crawler.timestamp_offset_ms)
+                            end_time_param = dt_oldest.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
+                            add_task_log(task_id, f"⏭️ 使用本页最老时间继续: {end_time_param}")
+                    except Exception:
+                        last_time_dt_in_page = None
+
+
                 total_stats['pages'] += 1
                 page_processed = True
-
-                # 计算下一页的 end_time（使用该页最老话题时间 - 偏移毫秒）
-                oldest_in_page = topics[-1].get('create_time')
-                try:
-                    dt_oldest = datetime.fromisoformat(oldest_in_page.replace('+0800', '+08:00'))
-                    dt_oldest = dt_oldest - timedelta(milliseconds=crawler.timestamp_offset_ms)
-                    end_time_param = dt_oldest.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
-                except Exception:
-                    end_time_param = oldest_in_page
-
-                # 若该页最老时间已早于 start_dt，则后续更老数据均不在范围内，结束
-                if last_time_dt_in_page and last_time_dt_in_page < start_dt:
-                    add_task_log(task_id, "✅ 已到达起始时间之前，任务结束")
-                    break
+                
 
                 # 成功处理后进行长休眠检查
                 crawler.check_page_long_delay()
