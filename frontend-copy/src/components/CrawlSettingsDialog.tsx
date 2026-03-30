@@ -13,86 +13,97 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
-interface DownloadSettingsDialogProps {
+interface CrawlSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  downloadInterval: number;
+  crawlInterval: number;
   longSleepInterval: number;
-  filesPerBatch: number;
+  pagesPerBatch: number;
   onSettingsChange: (settings: {
-    downloadInterval: number;
+    crawlInterval: number;
     longSleepInterval: number;
-    filesPerBatch: number;
-    downloadIntervalMin?: number;
-    downloadIntervalMax?: number;
+    pagesPerBatch: number;
+    crawlIntervalMin?: number;
+    crawlIntervalMax?: number;
     longSleepIntervalMin?: number;
     longSleepIntervalMax?: number;
   }) => void;
 }
 
-export default function DownloadSettingsDialog({
+export default function CrawlSettingsDialog({
   open,
   onOpenChange,
-  downloadInterval,
+  crawlInterval,
   longSleepInterval,
-  filesPerBatch,
+  pagesPerBatch,
   onSettingsChange,
-}: DownloadSettingsDialogProps) {
-  const [localDownloadInterval, setLocalDownloadInterval] = useState(downloadInterval);
+}: CrawlSettingsDialogProps) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [localCrawlInterval, setLocalCrawlInterval] = useState(crawlInterval);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [localLongSleepInterval, setLocalLongSleepInterval] = useState(longSleepInterval);
-  const [localFilesPerBatch, setLocalFilesPerBatch] = useState(filesPerBatch);
+  const [localPagesPerBatch, setLocalPagesPerBatch] = useState(pagesPerBatch);
 
   // 新增范围设置状态
-  const [downloadIntervalMin, setDownloadIntervalMin] = useState(15);
-  const [downloadIntervalMax, setDownloadIntervalMax] = useState(30);
-  const [longSleepIntervalMin, setLongSleepIntervalMin] = useState(30);
-  const [longSleepIntervalMax, setLongSleepIntervalMax] = useState(60);
+  const [crawlIntervalMin, setCrawlIntervalMin] = useState(2);
+  const [crawlIntervalMax, setCrawlIntervalMax] = useState(5);
+  const [longSleepIntervalMin, setLongSleepIntervalMin] = useState(180);
+  const [longSleepIntervalMax, setLongSleepIntervalMax] = useState(300);
   const [useRandomInterval, setUseRandomInterval] = useState(true);
-  const [selectedPreset, setSelectedPreset] = useState<'fast' | 'standard' | 'safe' | null>('fast');
+  const [selectedPreset, setSelectedPreset] = useState<'fast' | 'standard' | 'safe' | null>('standard');
 
   // 当对话框打开时，同步当前设置值
   useEffect(() => {
     if (open) {
-      setLocalDownloadInterval(downloadInterval);
+      setLocalCrawlInterval(crawlInterval);
       setLocalLongSleepInterval(longSleepInterval);
-      setLocalFilesPerBatch(filesPerBatch);
+      setLocalPagesPerBatch(pagesPerBatch);
 
-      // 如果是第一次打开，默认设置为快速配置
-      if (downloadInterval === 1.0 && longSleepInterval === 60.0 && filesPerBatch === 10) {
-        setPreset('fast');
+      // 如果是第一次打开，默认设置为标准配置
+      if (crawlInterval === 3.5 && longSleepInterval === 240 && pagesPerBatch === 15) {
+        setPreset('standard');
       }
     }
-  }, [open, downloadInterval, longSleepInterval, filesPerBatch]);
+  }, [open, crawlInterval, longSleepInterval, pagesPerBatch]);
 
   const handleSave = () => {
     // 确保所有值都有默认值
-    const finalDownloadIntervalMin = downloadIntervalMin || 15;
-    const finalDownloadIntervalMax = downloadIntervalMax || 30;
-    const finalLongSleepIntervalMin = longSleepIntervalMin || 30;
-    const finalLongSleepIntervalMax = longSleepIntervalMax || 60;
-    const finalFilesPerBatch = localFilesPerBatch || 10;
+    const finalCrawlIntervalMin = crawlIntervalMin || 2;
+    const finalCrawlIntervalMax = crawlIntervalMax || 5;
+    const finalLongSleepIntervalMin = longSleepIntervalMin || 180;
+    const finalLongSleepIntervalMax = longSleepIntervalMax || 300;
+    const finalPagesPerBatch = Math.max(localPagesPerBatch || 15, 5); // 确保最小值为5
 
-    onSettingsChange({
-      downloadInterval: useRandomInterval
-        ? (finalDownloadIntervalMin + finalDownloadIntervalMax) / 2
-        : Math.round((finalDownloadIntervalMin + finalDownloadIntervalMax) / 2),
+
+
+    const settingsToSend = {
+      crawlInterval: useRandomInterval
+        ? (finalCrawlIntervalMin + finalCrawlIntervalMax) / 2
+        : Math.round((finalCrawlIntervalMin + finalCrawlIntervalMax) / 2),
       longSleepInterval: useRandomInterval
         ? (finalLongSleepIntervalMin + finalLongSleepIntervalMax) / 2
         : Math.round((finalLongSleepIntervalMin + finalLongSleepIntervalMax) / 2),
-      filesPerBatch: finalFilesPerBatch,
-      downloadIntervalMin: useRandomInterval ? finalDownloadIntervalMin : undefined,
-      downloadIntervalMax: useRandomInterval ? finalDownloadIntervalMax : undefined,
+      pagesPerBatch: finalPagesPerBatch,
+      crawlIntervalMin: useRandomInterval ? finalCrawlIntervalMin : undefined,
+      crawlIntervalMax: useRandomInterval ? finalCrawlIntervalMax : undefined,
       longSleepIntervalMin: useRandomInterval ? finalLongSleepIntervalMin : undefined,
       longSleepIntervalMax: useRandomInterval ? finalLongSleepIntervalMax : undefined,
-    });
+    };
+
+    try {
+      onSettingsChange(settingsToSend);
+    } catch (error) {
+      console.error('CrawlSettingsDialog handleSave - onSettingsChange 调用失败:', error);
+    }
+
     onOpenChange(false);
   };
 
   const handleCancel = () => {
     // 重置为原始值
-    setLocalDownloadInterval(downloadInterval);
+    setLocalCrawlInterval(crawlInterval);
     setLocalLongSleepInterval(longSleepInterval);
-    setLocalFilesPerBatch(filesPerBatch);
+    setLocalPagesPerBatch(pagesPerBatch);
     onOpenChange(false);
   };
 
@@ -101,25 +112,25 @@ export default function DownloadSettingsDialog({
     setSelectedPreset(preset);
     switch (preset) {
       case 'fast':
-        setDownloadIntervalMin(15);
-        setDownloadIntervalMax(30);
-        setLongSleepIntervalMin(30);
-        setLongSleepIntervalMax(60);
-        setLocalFilesPerBatch(30);
+        setCrawlIntervalMin(1);
+        setCrawlIntervalMax(3);
+        setLongSleepIntervalMin(60);
+        setLongSleepIntervalMax(120);
+        setLocalPagesPerBatch(20);
         break;
       case 'standard':
-        setDownloadIntervalMin(30);
-        setDownloadIntervalMax(60);
-        setLongSleepIntervalMin(60);
-        setLongSleepIntervalMax(180);
-        setLocalFilesPerBatch(15);
-        break;
-      case 'safe':
-        setDownloadIntervalMin(60);
-        setDownloadIntervalMax(180);
+        setCrawlIntervalMin(2);
+        setCrawlIntervalMax(5);
         setLongSleepIntervalMin(180);
         setLongSleepIntervalMax(300);
-        setLocalFilesPerBatch(5);
+        setLocalPagesPerBatch(15);
+        break;
+      case 'safe':
+        setCrawlIntervalMin(5);
+        setCrawlIntervalMax(10);
+        setLongSleepIntervalMin(300);
+        setLongSleepIntervalMax(600);
+        setLocalPagesPerBatch(10);
         break;
     }
   };
@@ -128,9 +139,9 @@ export default function DownloadSettingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>下载间隔设置</DialogTitle>
+          <DialogTitle>话题爬取间隔设置</DialogTitle>
           <DialogDescription>
-            调整文件下载的间隔时间和批次设置，以避免触发反爬虫机制。
+            调整话题爬取的间隔时间和批次设置，以避免触发反爬虫机制。
           </DialogDescription>
         </DialogHeader>
 
@@ -160,64 +171,64 @@ export default function DownloadSettingsDialog({
             </div>
           </div>
 
-          {/* 下载间隔范围 */}
+          {/* 爬取间隔范围 */}
           <div className="space-y-2">
-            <Label>下载间隔范围 (秒)</Label>
+            <Label>页面爬取间隔范围 (秒)</Label>
             <div className="flex gap-2 items-center">
               <Input
                 type="number"
                 min="1"
-                max="300"
-                value={downloadIntervalMin}
+                max="60"
+                value={crawlIntervalMin}
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setDownloadIntervalMin('');
+                    setCrawlIntervalMin(2);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
-                      setDownloadIntervalMin(num);
+                      setCrawlIntervalMin(num);
                     }
                   }
                 }}
                 onBlur={(e) => {
                   if (e.target.value === '') {
-                    setDownloadIntervalMin(15);
+                    setCrawlIntervalMin(2);
                   }
                 }}
-                placeholder="15"
+                placeholder="2"
                 className="flex-1"
               />
               <span className="text-sm text-gray-500">-</span>
               <Input
                 type="number"
                 min="1"
-                max="300"
-                value={downloadIntervalMax}
+                max="60"
+                value={crawlIntervalMax}
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setDownloadIntervalMax('');
+                    setCrawlIntervalMax(5);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
-                      setDownloadIntervalMax(num);
+                      setCrawlIntervalMax(num);
                     }
                   }
                 }}
                 onBlur={(e) => {
                   if (e.target.value === '') {
-                    setDownloadIntervalMax(30);
+                    setCrawlIntervalMax(5);
                   }
                 }}
-                placeholder="30"
+                placeholder="5"
                 className="flex-1"
               />
             </div>
             <p className="text-xs text-gray-500">
               {useRandomInterval
-                ? '每次下载文件后的随机等待时间范围'
-                : `每次下载文件后的固定等待时间 (取中间值: ${Math.round((downloadIntervalMin + downloadIntervalMax) / 2)}秒)`
+                ? '每次爬取页面后的随机等待时间范围'
+                : `每次爬取页面后的固定等待时间 (取中间值: ${Math.round((crawlIntervalMin + crawlIntervalMax) / 2)}秒)`
               }
             </p>
           </div>
@@ -228,13 +239,13 @@ export default function DownloadSettingsDialog({
             <div className="flex gap-2 items-center">
               <Input
                 type="number"
-                min="10"
+                min="60"
                 max="3600"
                 value={longSleepIntervalMin}
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setLongSleepIntervalMin('');
+                    setLongSleepIntervalMin(180);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -244,22 +255,22 @@ export default function DownloadSettingsDialog({
                 }}
                 onBlur={(e) => {
                   if (e.target.value === '') {
-                    setLongSleepIntervalMin(30);
+                    setLongSleepIntervalMin(180);
                   }
                 }}
-                placeholder="30"
+                placeholder="180"
                 className="flex-1"
               />
               <span className="text-sm text-gray-500">-</span>
               <Input
                 type="number"
-                min="10"
+                min="60"
                 max="3600"
                 value={longSleepIntervalMax}
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setLongSleepIntervalMax('');
+                    setLongSleepIntervalMax(300);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -269,10 +280,10 @@ export default function DownloadSettingsDialog({
                 }}
                 onBlur={(e) => {
                   if (e.target.value === '') {
-                    setLongSleepIntervalMax(60);
+                    setLongSleepIntervalMax(300);
                   }
                 }}
-                placeholder="60"
+                placeholder="300"
                 className="flex-1"
               />
             </div>
@@ -286,33 +297,33 @@ export default function DownloadSettingsDialog({
 
           {/* 批次大小 */}
           <div className="space-y-2">
-            <Label htmlFor="filesPerBatch">批次大小 (个文件)</Label>
+            <Label>批次大小 (页面数)</Label>
             <Input
-              id="filesPerBatch"
               type="number"
-              min="1"
-              max="100"
-              step="1"
-              value={localFilesPerBatch}
+              min="5"
+              max="50"
+              value={localPagesPerBatch}
               onChange={(e) => {
                 const value = e.target.value;
                 if (value === '') {
-                  setLocalFilesPerBatch('');
+                  setLocalPagesPerBatch(15);
                 } else {
                   const num = parseInt(value);
                   if (!isNaN(num)) {
-                    setLocalFilesPerBatch(num);
+                    setLocalPagesPerBatch(num);
                   }
                 }
               }}
               onBlur={(e) => {
-                if (e.target.value === '') {
-                  setLocalFilesPerBatch(10);
+                if (e.target.value === '' || parseInt(e.target.value) < 5) {
+                  setLocalPagesPerBatch(15);
                 }
               }}
-              placeholder="10"
+              placeholder="15"
             />
-            <p className="text-xs text-gray-500">下载多少个文件后触发长休眠</p>
+            <p className="text-xs text-gray-500">
+              爬取多少个页面后触发长休眠（最小值：5页）
+            </p>
           </div>
 
           {/* 快速配置 */}
@@ -360,9 +371,9 @@ export default function DownloadSettingsDialog({
               </Button>
             </div>
             <div className="text-xs text-gray-500 space-y-1">
-              <div>• 快速: 15-30秒间隔, 30秒-1分钟长休眠, 30个文件/批次</div>
-              <div>• 标准: 30秒-1分钟间隔, 1-3分钟长休眠, 15个文件/批次</div>
-              <div>• 安全: 1-3分钟间隔, 3-5分钟长休眠, 5个文件/批次</div>
+              <div>• 快速: 1-3秒间隔, 1-2分钟长休眠, 20页/批次</div>
+              <div>• 标准: 2-5秒间隔, 3-5分钟长休眠, 15页/批次</div>
+              <div>• 安全: 5-10秒间隔, 5-10分钟长休眠, 10页/批次</div>
             </div>
           </div>
         </div>
