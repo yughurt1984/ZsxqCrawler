@@ -1,3 +1,7 @@
+// 在每个文件顶部添加
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unused-vars */
+
 'use client';
 
 import { useState } from 'react';

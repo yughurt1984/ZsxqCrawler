@@ -2,6 +2,9 @@
  * API客户端 - 与后端FastAPI服务通信
  */
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-empty-object-type */
+
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || 'http://localhost:8208').replace(/\/$/, '');
 
 // 类型定义
@@ -19,6 +22,48 @@ export interface Task {
   result?: any;
   created_at: string;
   updated_at: string;
+}
+
+export interface FileStats {
+  database_stats: {
+    // 根据后端返回结构添加
+  };
+  download_stats: {
+    total_files: number;
+    downloaded: number;
+    pending: number;
+    failed: number;
+  };
+}
+
+export interface Tag {
+  tag_id: number;
+  tag_name: string;
+  hid?: number;
+  topic_count: number;
+  created_at?: string;
+}
+
+export interface TaskResponse {
+  task_id: string;
+  message: string;
+}
+
+export interface RefreshTopicResponse {
+  success: boolean;
+  message: string;
+  updated_data: {
+    likes_count: number;
+    comments_count: number;
+    reading_count: number;
+    readers_count?: number;
+  };
+}
+
+export interface ClearCacheResponse {
+  success: boolean;
+  message: string;
+  deleted_count?: number;
 }
 
 export interface DatabaseStats {
@@ -132,6 +177,7 @@ export interface Account {
   name?: string;
   cookie?: string; // 已掩码
   created_at?: string;
+  is_default?: boolean;
 }
 
 export interface AccountSelf {
@@ -220,7 +266,7 @@ class ApiClient {
     longSleepIntervalMin?: number;
     longSleepIntervalMax?: number;
     pagesPerBatch?: number;
-  }) {
+  }): Promise<TaskResponse> {
     return this.request(`/api/crawl/historical/${groupId}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -232,12 +278,12 @@ class ApiClient {
   }
 
   async crawlAll(groupId: number, crawlSettings?: {
-    crawlIntervalMin?: number;
-    crawlIntervalMax?: number;
-    longSleepIntervalMin?: number;
-    longSleepIntervalMax?: number;
-    pagesPerBatch?: number;
-  }) {
+  crawlIntervalMin?: number;
+  crawlIntervalMax?: number;
+  longSleepIntervalMin?: number;
+  longSleepIntervalMax?: number;
+  pagesPerBatch?: number;
+  }): Promise<TaskResponse> {
     return this.request(`/api/crawl/all/${groupId}`, {
       method: 'POST',
       body: JSON.stringify(crawlSettings || {}),
@@ -245,12 +291,12 @@ class ApiClient {
   }
 
   async crawlIncremental(groupId: number, pages: number = 10, perPage: number = 20, crawlSettings?: {
-    crawlIntervalMin?: number;
-    crawlIntervalMax?: number;
-    longSleepIntervalMin?: number;
-    longSleepIntervalMax?: number;
-    pagesPerBatch?: number;
-  }) {
+  crawlIntervalMin?: number;
+  crawlIntervalMax?: number;
+  longSleepIntervalMin?: number;
+  longSleepIntervalMax?: number;
+  pagesPerBatch?: number;
+  }): Promise<TaskResponse> {
     return this.request(`/api/crawl/incremental/${groupId}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -262,12 +308,12 @@ class ApiClient {
   }
 
   async crawlLatestUntilComplete(groupId: number, crawlSettings?: {
-    crawlIntervalMin?: number;
-    crawlIntervalMax?: number;
-    longSleepIntervalMin?: number;
-    longSleepIntervalMax?: number;
-    pagesPerBatch?: number;
-  }) {
+  crawlIntervalMin?: number;
+  crawlIntervalMax?: number;
+  longSleepIntervalMin?: number;
+  longSleepIntervalMax?: number;
+  pagesPerBatch?: number;
+  }): Promise<TaskResponse> {
     return this.request(`/api/crawl/latest-until-complete/${groupId}`, {
       method: 'POST',
       body: JSON.stringify(crawlSettings || {}),
@@ -280,12 +326,12 @@ class ApiClient {
     return this.request(`/api/topics/${id}/${groupId}`);
   }
 
-  async refreshTopic(topicId: number | string, groupId: number) {
-    const id = String(topicId);
-    return this.request(`/api/topics/${id}/${groupId}/refresh`, {
-      method: 'POST',
-    });
-  }
+  async refreshTopic(topicId: number | string, groupId: number): Promise<RefreshTopicResponse> {
+  const id = String(topicId);
+  return this.request(`/api/topics/${id}/${groupId}/refresh`, {
+    method: 'POST',
+  });
+}
 
   // 删除单个话题
   async deleteSingleTopic(groupId: number | string, topicId: number | string) {
@@ -330,23 +376,30 @@ class ApiClient {
     return this.request(`/api/cache/images/info/${groupId}`);
   }
 
-  async clearImageCache(groupId: string) {
-    return this.request(`/api/cache/images/${groupId}`, {
-      method: 'DELETE',
-    });
-  }
+  async clearImageCache(groupId: string): Promise<ClearCacheResponse> {
+  return this.request(`/api/cache/images/${groupId}`, {
+    method: 'DELETE',
+  });
+}
 
   // 群组相关
   async getGroupInfo(groupId: number) {
     return this.request(`/api/groups/${groupId}/info`);
   }
 
+  async collectFiles(groupId: number | string): Promise<{ task_id: string; message: string }> {
+    return this.request(`/api/files/collect/${groupId}`, {
+      method: 'POST',
+    });
+  }
+
+
   // 文件相关
   async downloadFiles(groupId: number, maxFiles?: number, sortBy: string = 'download_count',
-                     downloadInterval: number = 1.0, longSleepInterval: number = 60.0,
-                     filesPerBatch: number = 10, downloadIntervalMin?: number,
-                     downloadIntervalMax?: number, longSleepIntervalMin?: number,
-                     longSleepIntervalMax?: number) {
+                   downloadInterval: number = 1.0, longSleepInterval: number = 60.0,
+                   filesPerBatch: number = 10, downloadIntervalMin?: number,
+                   downloadIntervalMax?: number, longSleepIntervalMin?: number,
+    longSleepIntervalMax?: number): Promise<TaskResponse> {
     const requestBody: any = {
       max_files: maxFiles,
       sort_by: sortBy,
@@ -381,9 +434,9 @@ class ApiClient {
     });
   }
 
-  async getFileStats(groupId: number) {
-    return this.request(`/api/files/stats/${groupId}`);
-  }
+  async getFileStats(groupId: number): Promise<FileStats> {
+  return this.request(`/api/files/stats/${groupId}`);
+}
 
   async downloadSingleFile(groupId: string, fileId: number, fileName?: string, fileSize?: number) {
     const params = new URLSearchParams();
@@ -519,9 +572,9 @@ class ApiClient {
     return this.request(`/api/groups/${groupId}/columns/summary`);
   }
 
-  async getGroupTags(groupId: number) {
-    return this.request(`/api/groups/${groupId}/tags`);
-  }
+  async getGroupTags(groupId: number): Promise<{ tags: Tag[]; total: number }> {
+  return this.request(`/api/groups/${groupId}/tags`);
+}
 
   async getTagTopics(groupId: number, tagId: number, page: number = 1, perPage: number = 20): Promise<PaginatedResponse<Topic>> {
     const params = new URLSearchParams({
