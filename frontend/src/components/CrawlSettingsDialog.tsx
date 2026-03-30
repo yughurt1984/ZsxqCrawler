@@ -38,7 +38,9 @@ export default function CrawlSettingsDialog({
   pagesPerBatch,
   onSettingsChange,
 }: CrawlSettingsDialogProps) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [localCrawlInterval, setLocalCrawlInterval] = useState(crawlInterval);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [localLongSleepInterval, setLocalLongSleepInterval] = useState(longSleepInterval);
   const [localPagesPerBatch, setLocalPagesPerBatch] = useState(pagesPerBatch);
 

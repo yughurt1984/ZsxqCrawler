@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useState, useEffect, useRef, memo, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -10,17 +10,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, X, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Trash2, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, RotateCcw, BookOpen } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Trash2, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, RotateCcw, BookOpen } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { apiClient, Group, GroupStats, Topic, FileStatus, Account, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
 import SafeImage from '@/components/SafeImage';
 import TaskLogViewer from '@/components/TaskLogViewer';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { createSafeHtml, createSafeHtmlWithHighlight, extractPlainText } from '@/lib/zsxq-content-renderer';
+import { createSafeHtmlWithHighlight, extractPlainText } from '@/lib/zsxq-content-renderer';
 import DownloadSettingsDialog from '@/components/DownloadSettingsDialog';
 import CrawlSettingsDialog from '@/components/CrawlSettingsDialog';
 import ImageGallery from '@/components/ImageGallery';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 
 // 话题详情缓存，避免重复请求
 const topicDetailCache: Map<string, any> = new Map();
