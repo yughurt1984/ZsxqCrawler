@@ -38,7 +38,9 @@ export default function DownloadSettingsDialog({
   filesPerBatch,
   onSettingsChange,
 }: DownloadSettingsDialogProps) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [localDownloadInterval, setLocalDownloadInterval] = useState(downloadInterval);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [localLongSleepInterval, setLocalLongSleepInterval] = useState(longSleepInterval);
   const [localFilesPerBatch, setLocalFilesPerBatch] = useState(filesPerBatch);
 

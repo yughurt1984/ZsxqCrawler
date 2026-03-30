@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
@@ -11,12 +11,12 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { 
   ArrowLeft, BookOpen, FileText, Download, RefreshCw, 
-  ChevronRight, File, FileImage, Clock, Heart, MessageCircle,
+  File, FileImage, Clock, Heart, MessageCircle,
   Users, FolderOpen, Play, Settings, Trash2
 } from 'lucide-react';
 import { apiClient, ColumnInfo, ColumnTopic, ColumnTopicDetail, ColumnsStats, ColumnsFetchSettings } from '@/lib/api';
 import { toast } from 'sonner';
-import SafeImage from '@/components/SafeImage';
+
 import ImageGallery from '@/components/ImageGallery';
 import TaskLogViewer from '@/components/TaskLogViewer';
 import { createSafeHtml } from '@/lib/zsxq-content-renderer';

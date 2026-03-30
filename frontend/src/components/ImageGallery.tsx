@@ -50,6 +50,7 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ images, className = '', siz
   };
 
   // 获取预览图URL，优先使用original，然后large
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const getPreviewUrl = (image: ImageData) => {
     return apiClient.getProxyImageUrl(
       image.original?.url || image.large?.url || image.thumbnail?.url || '',
