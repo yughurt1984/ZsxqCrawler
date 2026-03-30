@@ -260,7 +260,7 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
             </CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground mb-4">{error}</p>
-              <Button onClick={loadGroups} className="w-full">
+              <Button onClick={() =>loadGroups} className="w-full">
                 重试
               </Button>
             </CardContent>

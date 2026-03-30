@@ -41,6 +41,11 @@ export interface Tag {
   created_at?: string;
 }
 
+export interface TaskResponse {
+  task_id: string;
+  message: string;
+}
+
 export interface RefreshTopicResponse {
   success: boolean;
   message: string;
@@ -258,7 +263,7 @@ class ApiClient {
     longSleepIntervalMin?: number;
     longSleepIntervalMax?: number;
     pagesPerBatch?: number;
-  }) {
+  }): Promise<TaskResponse> {
     return this.request(`/api/crawl/historical/${groupId}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -270,12 +275,12 @@ class ApiClient {
   }
 
   async crawlAll(groupId: number, crawlSettings?: {
-    crawlIntervalMin?: number;
-    crawlIntervalMax?: number;
-    longSleepIntervalMin?: number;
-    longSleepIntervalMax?: number;
-    pagesPerBatch?: number;
-  }) {
+  crawlIntervalMin?: number;
+  crawlIntervalMax?: number;
+  longSleepIntervalMin?: number;
+  longSleepIntervalMax?: number;
+  pagesPerBatch?: number;
+  }): Promise<TaskResponse> {
     return this.request(`/api/crawl/all/${groupId}`, {
       method: 'POST',
       body: JSON.stringify(crawlSettings || {}),
@@ -283,12 +288,12 @@ class ApiClient {
   }
 
   async crawlIncremental(groupId: number, pages: number = 10, perPage: number = 20, crawlSettings?: {
-    crawlIntervalMin?: number;
-    crawlIntervalMax?: number;
-    longSleepIntervalMin?: number;
-    longSleepIntervalMax?: number;
-    pagesPerBatch?: number;
-  }) {
+  crawlIntervalMin?: number;
+  crawlIntervalMax?: number;
+  longSleepIntervalMin?: number;
+  longSleepIntervalMax?: number;
+  pagesPerBatch?: number;
+  }): Promise<TaskResponse> {
     return this.request(`/api/crawl/incremental/${groupId}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -300,12 +305,12 @@ class ApiClient {
   }
 
   async crawlLatestUntilComplete(groupId: number, crawlSettings?: {
-    crawlIntervalMin?: number;
-    crawlIntervalMax?: number;
-    longSleepIntervalMin?: number;
-    longSleepIntervalMax?: number;
-    pagesPerBatch?: number;
-  }) {
+  crawlIntervalMin?: number;
+  crawlIntervalMax?: number;
+  longSleepIntervalMin?: number;
+  longSleepIntervalMax?: number;
+  pagesPerBatch?: number;
+  }): Promise<TaskResponse> {
     return this.request(`/api/crawl/latest-until-complete/${groupId}`, {
       method: 'POST',
       body: JSON.stringify(crawlSettings || {}),
@@ -388,10 +393,10 @@ class ApiClient {
 
   // 文件相关
   async downloadFiles(groupId: number, maxFiles?: number, sortBy: string = 'download_count',
-                     downloadInterval: number = 1.0, longSleepInterval: number = 60.0,
-                     filesPerBatch: number = 10, downloadIntervalMin?: number,
-                     downloadIntervalMax?: number, longSleepIntervalMin?: number,
-                     longSleepIntervalMax?: number) {
+                   downloadInterval: number = 1.0, longSleepInterval: number = 60.0,
+                   filesPerBatch: number = 10, downloadIntervalMin?: number,
+                   downloadIntervalMax?: number, longSleepIntervalMin?: number,
+    longSleepIntervalMax?: number): Promise<TaskResponse> {
     const requestBody: any = {
       max_files: maxFiles,
       sort_by: sortBy,
