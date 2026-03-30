@@ -139,13 +139,13 @@ export default function Home() {
                     <div className="flex gap-6 text-center">
                       <div>
                         <div className="text-base font-semibold">
-                          {selectedGroup.statistics.members_count || 0}
+                          {selectedGroup.statistics.members?.count || 0}
                         </div>
                         <div className="text-xs text-muted-foreground">成员</div>
                       </div>
                       <div>
                         <div className="text-base font-semibold">
-                          {selectedGroup.statistics.topics_count || 0}
+                          {selectedGroup.statistics.topics?.topics_count || 0}
                         </div>
                         <div className="text-xs text-muted-foreground">话题</div>
                       </div>

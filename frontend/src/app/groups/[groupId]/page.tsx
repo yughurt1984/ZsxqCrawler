@@ -311,7 +311,7 @@ export default function GroupDetailPage() {
       let data;
       if (selectedTag) {
         // 如果选择了标签，使用标签过滤API
-        data = await apiClient.getTagTopics(parseInt(groupId), selectedTag, currentPage, 20);
+        data = await apiClient.getTagTopics(groupId, selectedTag, currentPage, 20);
       } else {
         // 否则使用原有的API
         data = await apiClient.getGroupTopics(groupId, currentPage, 20, searchTerm || undefined);
@@ -378,7 +378,7 @@ export default function GroupDetailPage() {
 
   const loadGroupInfo = async () => {
     try {
-      const info = await apiClient.getGroupInfo(parseInt(groupId));
+      const info = await apiClient.getGroupInfo(groupId);
       setGroupInfo(info);
     } catch (error) {
       console.error('加载群组信息失败:', error);
@@ -387,7 +387,7 @@ export default function GroupDetailPage() {
 
   const loadLocalFileCount = async () => {
     try {
-      const stats = await apiClient.getFileStats(parseInt(groupId));
+      const stats = await apiClient.getFileStats(groupId);
       // 使用特定群组的文件统计数据
       setLocalFileCount(stats.download_stats.total_files || 0);
     } catch (error) {
@@ -400,7 +400,7 @@ export default function GroupDetailPage() {
   const loadTags = async () => {
     setTagsLoading(true);
     try {
-      const data = await apiClient.getGroupTags(parseInt(groupId));
+      const data = await apiClient.getGroupTags(groupId);
       setTags(data.tags || []);
     } catch (error) {
       console.error('Failed to load tags:', error);
@@ -685,7 +685,7 @@ export default function GroupDetailPage() {
   const handleCollectFiles = async () => {
     try {
       setFileLoading('collect');
-      const response = await apiClient.collectFiles();
+      const response = await apiClient.collectFiles(groupId);
       toast.success(`文件收集任务已创建: ${(response as any).task_id}`);
       // 设置当前任务ID以显示日志
       setCurrentTaskId((response as any).task_id);
@@ -702,7 +702,7 @@ export default function GroupDetailPage() {
     try {
       setFileLoading('download-time');
       const response = await apiClient.downloadFiles(
-        parseInt(groupId),
+        groupId,
         undefined,
         'create_time',
         downloadInterval,
@@ -729,7 +729,7 @@ export default function GroupDetailPage() {
     try {
       setFileLoading('download-count');
       const response = await apiClient.downloadFiles(
-        parseInt(groupId),
+        groupId,
         undefined,
         'download_count',
         downloadInterval,
@@ -755,7 +755,7 @@ export default function GroupDetailPage() {
   const handleClearFileDatabase = async () => {
     try {
       setFileLoading('clear');
-      const response = await apiClient.clearFileDatabase(parseInt(groupId));
+      const response = await apiClient.clearFileDatabase(groupId);
       toast.success(`文件数据库已删除`);
       // 重新加载本地文件数量
       loadLocalFileCount();
@@ -814,14 +814,15 @@ export default function GroupDetailPage() {
     }
   };
 
-  // 切换评论展开状态
-  const toggleComments = (topicId: number) => {
+    // 切换评论展开状态
+  const toggleComments = (topicId: number | string) => {
+    const id = String(topicId);  // 转换为 string
     setExpandedComments(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(topicId)) {
-        newSet.delete(topicId);
+      if (newSet.has(id)) {
+        newSet.delete(id);
       } else {
-        newSet.add(topicId);
+        newSet.add(id);
       }
       return newSet;
     });
@@ -838,7 +839,7 @@ export default function GroupDetailPage() {
     setRefreshingTopics(prev => new Set(prev).add(topicId));
 
     try {
-      const response = await apiClient.refreshTopic(parseInt(topicId.toString()), parseInt(groupId));
+      const response = await apiClient.refreshTopic(topicId, groupId);
 
       if (response.success) {
         toast.success(`${response.message} - 点赞:${response.updated_data.likes_count} 评论:${response.updated_data.comments_count}`);
@@ -1013,7 +1014,7 @@ export default function GroupDetailPage() {
   const getFileStatus = useCallback(async (fileId: number, fileName?: string, fileSize?: number) => {
     try {
       // 首先尝试从数据库获取文件状态
-      const status = await apiClient.getFileStatus(groupId, fileId) as FileStatus;
+      const status = await apiClient.getFileStatus(groupId.toString(), fileId) as FileStatus;
       setFileStatuses(prev => new Map(prev).set(fileId, status));
       return status;
     } catch (error) {
@@ -1022,7 +1023,7 @@ export default function GroupDetailPage() {
       // 如果数据库中没有文件，但有文件名和大小，检查本地文件
       if (fileName && fileSize !== undefined) {
         try {
-          const localStatus = await apiClient.checkLocalFileStatus(groupId, fileName, fileSize) as any;
+          const localStatus = await apiClient.checkLocalFileStatus(groupId.toString(), fileName, fileSize) as any;
           const status: FileStatus = {
             file_id: fileId,
             name: fileName,
@@ -1064,7 +1065,7 @@ export default function GroupDetailPage() {
     setDownloadingFiles(prev => new Set(prev).add(fileId));
 
     try {
-      const response = await apiClient.downloadSingleFile(groupId, fileId, fileName, fileSize) as any;
+      const response = await apiClient.downloadSingleFile(groupId.toString(), fileId, fileName, fileSize) as any;
       toast.success(`文件下载任务已创建: ${response.task_id}`);
 
       // 设置当前任务ID以显示日志
@@ -1105,14 +1106,15 @@ export default function GroupDetailPage() {
     }
   };
 
-  // 切换内容展开状态
-  const toggleContent = (topicId: number) => {
+    // 切换内容展开状态
+  const toggleContent = (topicId: number | string) => {
+    const id = String(topicId);  // 转换为 string
     setExpandedContent(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(topicId)) {
-        newSet.delete(topicId);
+      if (newSet.has(id)) {
+        newSet.delete(id);
       } else {
-        newSet.add(topicId);
+        newSet.add(id);
       }
       return newSet;
     });
@@ -1885,7 +1887,7 @@ export default function GroupDetailPage() {
             <CardContent className="pt-6">
               <div className="text-center">
                 <p className="text-red-600 mb-4">{error}</p>
-                <Button onClick={loadGroupDetail}>重试</Button>
+                <Button onClick={() => loadGroupDetail()}>重试</Button>
               </div>
             </CardContent>
           </Card>
@@ -2317,7 +2319,7 @@ export default function GroupDetailPage() {
             <ScrollArea className="h-full">
               <CardContent className="p-4">
                 {/* 模式切换 */}
-                <Tabs value={activeMode} onValueChange={setActiveMode} className="space-y-4">
+                <Tabs value={activeMode} onValueChange={(v) => { if (v === 'crawl' || v === 'download') setActiveMode(v); }} className="space-y-4">
                   <TabsList className="grid w-full grid-cols-2">
                     <TabsTrigger value="crawl" className="text-xs">
                       <MessageSquare className="h-3 w-3 mr-1" />
