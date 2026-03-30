@@ -172,7 +172,7 @@ export default function DownloadSettingsDialog({
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setDownloadIntervalMin('');
+                    setDownloadIntervalMin(1);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -197,7 +197,7 @@ export default function DownloadSettingsDialog({
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setDownloadIntervalMax('');
+                    setDownloadIntervalMax(30);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -234,7 +234,7 @@ export default function DownloadSettingsDialog({
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setLongSleepIntervalMin('');
+                    setLongSleepIntervalMin(0);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -259,7 +259,7 @@ export default function DownloadSettingsDialog({
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setLongSleepIntervalMax('');
+                    setLongSleepIntervalMax(60);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -297,7 +297,7 @@ export default function DownloadSettingsDialog({
               onChange={(e) => {
                 const value = e.target.value;
                 if (value === '') {
-                  setLocalFilesPerBatch('');
+                  setLocalFilesPerBatch(10);
                 } else {
                   const num = parseInt(value);
                   if (!isNaN(num)) {

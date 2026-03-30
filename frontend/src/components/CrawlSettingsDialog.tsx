@@ -181,7 +181,7 @@ export default function CrawlSettingsDialog({
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setCrawlIntervalMin('');
+                    setCrawlIntervalMin(2);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -206,7 +206,7 @@ export default function CrawlSettingsDialog({
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setCrawlIntervalMax('');
+                    setCrawlIntervalMax(5);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -243,7 +243,7 @@ export default function CrawlSettingsDialog({
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setLongSleepIntervalMin('');
+                    setLongSleepIntervalMin(180);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -268,7 +268,7 @@ export default function CrawlSettingsDialog({
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === '') {
-                    setLongSleepIntervalMax('');
+                    setLongSleepIntervalMax(300);
                   } else {
                     const num = parseInt(value);
                     if (!isNaN(num)) {
@@ -304,7 +304,7 @@ export default function CrawlSettingsDialog({
               onChange={(e) => {
                 const value = e.target.value;
                 if (value === '') {
-                  setLocalPagesPerBatch('');
+                  setLocalPagesPerBatch(15);
                 } else {
                   const num = parseInt(value);
                   if (!isNaN(num)) {
