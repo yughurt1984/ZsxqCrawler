@@ -7,10 +7,10 @@ import Fullscreen from 'yet-another-react-lightbox/plugins/fullscreen';
 import { apiClient } from '@/lib/api';
 
 interface ImageData {
-  image_id: string;
-  original?: { url: string };
-  large?: { url: string };
-  thumbnail?: { url: string };
+  image_id?: string | number;  // 兼容 number 类型
+  original?: { url?: string };
+  large?: { url?: string };
+  thumbnail?: { url?: string };
 }
 
 interface ImageGalleryProps {
