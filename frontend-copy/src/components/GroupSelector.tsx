@@ -243,9 +243,9 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
     }
   };
 
-  // 新增：推出登录
+    // 新增：退出登录
   const handleLogout = () => {
-    (apiClient as any).logout();
+    apiClient.clearToken();
     setCurrentUser(null);
     setAuthOpen(true);
   };
