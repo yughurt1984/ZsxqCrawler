@@ -91,6 +91,7 @@ export interface Topic {
   reading_count: number;
   type: string;
   imported_at?: string;
+  _filtered?: boolean;  // 添加这一行
 }
 
 export interface FileItem {
@@ -200,19 +201,80 @@ class ApiClient {
     this.baseUrl = baseUrl;
   }
 
-  private async request<T>(
+  // =========================
+  // Token 管理
+  // =========================
+
+  private getToken(): string | null {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('access_token');
+  }
+
+  setToken(token: string) {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('access_token', token);
+  }
+
+  clearToken() {
+    if (typeof window === 'undefined') return;
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('user_info');
+  }
+
+  getUserInfo(): { id: number; username: string; access_mode: string; expire_at: string | null; allowed_groups: Record<number, string> } | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem('user_info');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+  setUserInfo(info: { id: number; username: string; access_mode: string; expire_at: string | null; allowed_groups: Record<number, string> }) {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('user_info', JSON.stringify(info));
+  }
+
+
+private async request<T>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
-    
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(options.headers as Record<string, string>),
+    };
+
+    // 自动附加 Token
+    const token = this.getToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
+      headers,
       ...options,
     });
+
+    // 401 = 未登录/Token 过期
+    const isPublicAuthEndpoint = endpoint === '/api/auth/register' || endpoint === '/api/auth/login';
+    if (response.status === 401 && !isPublicAuthEndpoint) {
+
+
+      this.clearToken();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('auth-expired'));
+      }
+      throw new Error('登录已过期，请重新登录');
+    }
+
+    // 403 = 无权限
+    if (response.status === 403) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.detail || '无权访问该资源');
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -221,6 +283,7 @@ class ApiClient {
 
     return response.json();
   }
+
 
   // 健康检查
   async healthCheck() {
@@ -758,6 +821,62 @@ class ApiClient {
       method: 'DELETE',
     });
   }
+
+  // =========================
+  // 用户认证 API
+  // =========================
+
+    async register(params: {
+    username: string;
+    email: string;
+    phone: string;
+    password: string;
+  }): Promise<{ access_token: string; token_type: string; username: string }> {
+    const res = await this.request<{ access_token: string; token_type: string; username: string }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    this.setToken(res.access_token);
+    return res;
+  }
+
+
+  async login(params: {
+    username: string;
+    password: string;
+  }): Promise<{ access_token: string; token_type: string; username: string }> {
+    const res = await this.request<{ access_token: string; token_type: string; username: string }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    this.setToken(res.access_token);
+    return res;
+  }
+
+  async getMe(): Promise<{
+    id: number;
+    username: string;
+    email: string;
+    phone: string;
+    access_mode: string;
+    expire_at: string | null;
+    created_at: string;
+    allowed_groups: Record<number, string>;
+  }> {
+    const res = await this.request<{
+      id: number;
+      username: string;
+      email: string;
+      phone: string;
+      access_mode: string;
+      expire_at: string | null;
+      created_at: string;
+      allowed_groups: Record<number, string>;
+    }>('/api/auth/me');
+    this.setUserInfo(res);
+    return res;
+  }
+
 
   // =========================
   // 专栏相关 API
