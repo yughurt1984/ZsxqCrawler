@@ -9,8 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Trash2, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, RotateCcw, BookOpen } from 'lucide-react';
+import { AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { User, LogOut, CreditCard, ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, BookOpen } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { apiClient, Group, GroupStats, Topic, FileStatus, Account, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
@@ -21,9 +21,36 @@ import { createSafeHtmlWithHighlight, extractPlainText } from '@/lib/zsxq-conten
 import DownloadSettingsDialog from '@/components/DownloadSettingsDialog';
 import CrawlSettingsDialog from '@/components/CrawlSettingsDialog';
 import ImageGallery from '@/components/ImageGallery';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import AuthDialog from '@/components/AuthDialog';
+
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable @typescript-eslint/no-unused-vars */
+
+// access_mode 配置（中文 + 样式）
+const getAccessModeConfig = (mode: string) => {
+  const configs: Record<string, { label: string; className: string }> = {
+    'admin': {
+      label: '管理员',
+      className: 'bg-purple-100 text-purple-700 border-purple-300'
+    },
+    'vip': {
+      label: 'VIP会员',
+      className: 'bg-amber-100 text-amber-700 border-amber-300'
+    },
+    'client': {
+      label: '付费客户',
+      className: 'bg-blue-100 text-blue-700 border-blue-300'
+    },
+    'free': {
+      label: '免费用户',
+      className: 'bg-gray-100 text-gray-700 border-gray-300'
+    }
+  };
+  return configs[mode] || { label: mode, className: 'bg-gray-100 text-gray-700 border-gray-300' };
+};
+
 
 // 话题详情缓存，避免重复请求
 const topicDetailCache: Map<string, any> = new Map();
@@ -61,8 +88,8 @@ export default function GroupDetailPage() {
   const [selectedTag, setSelectedTag] = useState<number | null>(null);
   const [tagsLoading, setTagsLoading] = useState(false);
   const [fetchingComments, setFetchingComments] = useState<Set<number>>(new Set());
-  const [refreshingTopics, setRefreshingTopics] = useState<Set<number>>(new Set());
-  const [deletingTopics, setDeletingTopics] = useState<Set<number>>(new Set());
+  
+  
   const [cacheInfo, setCacheInfo] = useState<any>(null);
   const [clearingCache, setClearingCache] = useState(false);
   const [fileStatuses, setFileStatuses] = useState<Map<number, FileStatus>>(new Map());
@@ -71,17 +98,19 @@ export default function GroupDetailPage() {
   // 账号相关
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [groupAccount, setGroupAccount] = useState<Account | null>(null);
+  // 群组定价信息
+  const [groupProduct, setGroupProduct] = useState<any>(null);
+
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [assigningAccount, setAssigningAccount] = useState<boolean>(false);
   const [accountSelf, setAccountSelf] = useState<AccountSelf | null>(null);
   const [loadingAccountSelf, setLoadingAccountSelf] = useState<boolean>(false);
   const [refreshingAccountSelf, setRefreshingAccountSelf] = useState<boolean>(false);
 
-  // 专栏相关
-  const [hasColumns, setHasColumns] = useState<boolean>(false);
-  const [columnsTitle, setColumnsTitle] = useState<string | null>(null);
-
-
+  
+  // 用户认证相关
+  const [authOpen, setAuthOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<{ id: number; username: string; access_mode: string; allowed_groups: Record<number, { expiry: string; joined: string }> } | null>(null);
 
 
 
@@ -176,8 +205,33 @@ export default function GroupDetailPage() {
     loadGroupAccount();
     loadAccounts();
     loadGroupAccountSelf();
-    loadColumnsSummary();
+    loadGroupProduct();
   }, [groupId]);
+
+  // 检查登录状态
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = (apiClient as any).getToken?.();
+      if (!token) {
+        setAuthOpen(true);
+        return;
+      }
+      try {
+        const user = await apiClient.getMe();
+        setCurrentUser({ id: user.id, username: user.username, access_mode: user.access_mode, allowed_groups: user.allowed_groups });
+      } catch {
+        setAuthOpen(true);
+      }
+    };
+    checkAuth();
+  }, []);
+
+  // 监听 Token 过期
+  useEffect(() => {
+    const handler = () => setAuthOpen(true);
+    window.addEventListener('auth-expired', handler);
+    return () => window.removeEventListener('auth-expired', handler);
+  }, []);
 
   // 检查定时任务状态的函数
   const checkScheduledStatus = useCallback(async () => {
@@ -385,6 +439,18 @@ export default function GroupDetailPage() {
       setGroupInfo(info);
     } catch (error) {
       console.error('加载群组信息失败:', error);
+    }
+  };
+
+  // 加载群组定价信息
+  const loadGroupProduct = async () => {
+    try {
+      const response = await fetch('http://localhost:8209/api/groups/products');
+      const data = await response.json();
+      const product = data.products.find((p: any) => p.group_id === groupId);
+      setGroupProduct(product || null);
+    } catch (err) {
+      console.error('加载定价信息失败:', err);
     }
   };
 
@@ -831,86 +897,6 @@ export default function GroupDetailPage() {
     });
   };
 
-
-
-  // 刷新单个话题
-  const refreshSingleTopic = async (topicId: number) => {
-    if (refreshingTopics.has(topicId)) {
-      return; // 防止重复请求
-    }
-
-    setRefreshingTopics(prev => new Set(prev).add(topicId));
-
-    try {
-      const response = await apiClient.refreshTopic(topicId, groupId);
-
-      if (response.success) {
-        toast.success(`${response.message} - 点赞:${response.updated_data.likes_count} 评论:${response.updated_data.comments_count}`);
-
-        // 更新当前话题列表中的数据，而不是重新加载整个列表
-        setTopics(prevTopics =>
-          prevTopics.map(topic =>
-            parseInt(topic.topic_id.toString()) === parseInt(topicId.toString())
-              ? {
-                  ...topic,
-                  likes_count: response.updated_data.likes_count,
-                  comments_count: response.updated_data.comments_count,
-                  reading_count: response.updated_data.reading_count,
-                  readers_count: response.updated_data.readers_count,
-                  imported_at: new Date().toISOString() // 更新获取时间
-                }
-              : topic
-          )
-        );
-      } else {
-        toast.error(response.message || '刷新话题失败');
-      }
-    } catch (error) {
-      toast.error('刷新话题失败');
-      console.error('刷新话题失败:', error);
-    } finally {
-      setRefreshingTopics(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(topicId);
-        return newSet;
-      });
-    }
-  };
-
-  // 删除单个话题（改用自定义弹窗，保留方法以兼容可能的调用）
-  const handleDeleteSingleTopic = async (topicId: number) => {
-    await deleteSingleTopicConfirmed(topicId);
-  };
-
-  // 删除单个话题（自定义弹窗调用，无浏览器确认）
-  const deleteSingleTopicConfirmed = async (topicId: number) => {
-    setDeletingTopics(prev => new Set(prev).add(topicId));
-    try {
-      const res = await apiClient.deleteSingleTopic(groupId, topicId) as any;
-      if (res && res.success) {
-        // 从当前列表移除
-        setTopics(prev =>
-          prev.filter(t => parseInt(t.topic_id.toString()) !== parseInt(topicId.toString()))
-        );
-        toast.success('话题已删除');
-        // 刷新统计与标签
-        loadGroupStats();
-        loadTags();
-      } else {
-        toast.error(res?.message || '删除失败');
-      }
-    } catch (err) {
-      toast.error('删除失败');
-      console.error('删除话题失败:', err);
-    } finally {
-      setDeletingTopics(prev => {
-        const s = new Set(prev);
-        s.delete(topicId);
-        return s;
-      });
-    }
-  };
-
   // 加载缓存信息
   const loadCacheInfo = async () => {
     try {
@@ -921,18 +907,6 @@ export default function GroupDetailPage() {
     }
   };
 
-  // 加载专栏摘要信息
-  const loadColumnsSummary = async () => {
-    try {
-      const summary = await apiClient.getGroupColumnsSummary(groupId);
-      setHasColumns(summary.has_columns);
-      setColumnsTitle(summary.title);
-    } catch (error) {
-      console.error('加载专栏信息失败:', error);
-      setHasColumns(false);
-      setColumnsTitle(null);
-    }
-  };
 
   // 清空图片缓存（使用自定义弹窗，不再重复浏览器确认）
   const clearImageCache = async () => {
@@ -1123,6 +1097,12 @@ export default function GroupDetailPage() {
     });
   };
 
+  //添加退出登录函数
+  const handleLogout = () => {
+    apiClient.clearToken();
+    setCurrentUser(null);
+    setAuthOpen(true);
+  };
 
 
   const getTypeBadge = (type: string) => {
@@ -1150,6 +1130,79 @@ export default function GroupDetailPage() {
         return null;
     }
   };
+
+  // 获取授权到期状态
+  const getExpiryStatus = (expiryTime?: string): { text: string; colorClass: string } => {
+    if (!expiryTime) {
+      return { text: '未授权', colorClass: 'bg-gray-100 text-gray-700' };
+    }
+
+    const expiryDate = new Date(expiryTime);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    expiryDate.setHours(0, 0, 0, 0);
+
+    const diffTime = expiryDate.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) {
+      return { text: '已过期', colorClass: 'bg-red-100 text-red-700' };
+    }
+    if (diffDays === 0) {
+      return { text: '今日到期', colorClass: 'bg-yellow-100 text-yellow-700' };
+    }
+    if (diffDays <= 10) {
+      return { text: `${diffDays}天后到期`, colorClass: 'bg-yellow-100 text-yellow-700' };
+    }
+    return { text: '未到期', colorClass: 'bg-green-100 text-green-700' };
+  };
+
+  // 获取用户类型标签
+  const getAccessTypeBadge = () => {
+    if (!currentUser) return null;
+
+    switch (currentUser.access_mode) {
+      case 'admin':
+        return <Badge className="bg-purple-100 text-purple-700 text-xs px-1.5 py-0.5">管理员</Badge>;
+      case 'vip':
+        return <Badge className="bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5">VIP</Badge>;
+      case 'client':
+        // 检查是否被授权访问当前群组
+        if (currentUser.allowed_groups && groupId in currentUser.allowed_groups) {
+          return <Badge className="bg-green-100 text-green-700 text-xs px-1.5 py-0.5">已订阅</Badge>;
+        }
+        return <Badge className="bg-gray-100 text-gray-700 text-xs px-1.5 py-0.5">免费</Badge>;
+      case 'free':
+      default:
+        return <Badge className="bg-gray-100 text-gray-700 text-xs px-1.5 py-0.5">免费</Badge>;
+    }
+  };
+
+  // 获取授权到期状态标签（仅客户用户且已授权时显示）
+  const getAuthExpiryBadge = () => {
+    if (!currentUser || currentUser.access_mode !== 'client') return null;
+    if (!currentUser.allowed_groups || !(groupId in currentUser.allowed_groups)) return null;
+
+    const expiry = currentUser.allowed_groups[groupId].expiry;
+    const expiryDate = new Date(expiry);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    expiryDate.setHours(0, 0, 0, 0);
+
+    const diffTime = expiryDate.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) {
+      return <Badge className="bg-orange-100 text-orange-700 text-xs px-1.5 py-0.5">已到期</Badge>;
+    } else if (diffDays === 0) {
+      return <Badge className="bg-yellow-100 text-yellow-700 text-xs px-1.5 py-0.5">当天到期</Badge>;
+    } else if (diffDays <= 7) {
+      return <Badge className="bg-yellow-100 text-yellow-700 text-xs px-1.5 py-0.5">{diffDays}天后到期</Badge>;
+    } else {
+      return <Badge className="bg-green-100 text-green-700 text-xs px-1.5 py-0.5">未到期</Badge>;
+    }
+  };
+
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return '';
@@ -1307,9 +1360,6 @@ export default function GroupDetailPage() {
               <div className="flex flex-col items-end gap-1">
                 {/* 徽章和刷新按钮 */}
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary" className="text-xs">
-                    {topic.type}
-                  </Badge>
                   {topic.sticky && (
                     <Badge variant="outline" className="text-xs text-red-600 border-red-200">
                       置顶
@@ -1321,48 +1371,6 @@ export default function GroupDetailPage() {
                     </Badge>
                   )}
 
-                  {/* 刷新按钮 */}
-                  <button type="button"
-                    onClick={() => refreshSingleTopic(topic.topic_id)}
-                    disabled={refreshingTopics.has(topic.topic_id)}
-                    className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-400 transition-colors ml-2"
-                    title="从服务器重新获取最新数据"
-                  >
-                    <RotateCcw className={`w-3 h-3 ${refreshingTopics.has(topic.topic_id) ? 'animate-spin' : ''}`} />
-                    {refreshingTopics.has(topic.topic_id) ? '获取中' : '远程刷新'}
-                  </button>
-
-                  {/* 删除按钮（自定义弹窗确认） */}
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <button
-                        type="button"
-                        disabled={deletingTopics.has(topic.topic_id)}
-                        className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 disabled:text-gray-400 transition-colors ml-2"
-                        title="删除该话题（本地数据库）"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        {deletingTopics.has(topic.topic_id) ? '删除中' : '删除'}
-                      </button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle className="text-red-600">确认删除该话题</AlertDialogTitle>
-                        <AlertDialogDescription className="text-red-700">
-                          此操作将永久删除该话题及其所有关联数据（评论、用户信息等），且不可恢复。确定要继续吗？
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>取消</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => deleteSingleTopicConfirmed(topic.topic_id)}
-                          className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
-                        >
-                          确认删除
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
                 </div>
 
                 {/* 获取时间信息 */}
@@ -1957,30 +1965,21 @@ export default function GroupDetailPage() {
 
   return (
     <div className="h-screen bg-gray-50 overflow-hidden flex flex-col">
-      <div className="flex-shrink-0 p-4">
-        <div className="flex items-center gap-4">
+      <div className="flex-shrink-0 px-8 py-4">
+        <div className="flex items-center justify-between gap-4">
+          {/* 左侧：返回按钮 */}
           <Button
             variant="ghost"
             onClick={() => router.push('/')}
-            className="flex items-center gap-2"
+            className="flex items-center gap-2 flex-shrink-0"
           >
             <ArrowLeft className="h-4 w-4" />
             返回群组列表
           </Button>
 
+          {/* 中间：搜索栏 */}
           <div className="flex items-center gap-4 flex-1 justify-center max-w-2xl mx-auto">
-            {/* 专栏入口按钮 - 仅在有专栏时显示 */}
-            {hasColumns && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex items-center gap-2 whitespace-nowrap bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200 hover:border-amber-300 hover:from-amber-100 hover:to-orange-100 text-amber-700"
-                onClick={() => router.push(`/groups/${groupId}/columns`)}
-              >
-                <BookOpen className="h-4 w-4" />
-                {columnsTitle || '专栏'}
-              </Button>
-            )}
+            
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
               <Input
@@ -1998,11 +1997,48 @@ export default function GroupDetailPage() {
             </Button>
           </div>
 
+          {/* 右侧：用户下拉菜单（独立区域，与首页一致） */}
+          <div className="flex items-center gap-2 flex-shrink-0 mr-4">
+            {currentUser ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="flex items-center gap-2">
+                    <User className="h-4 w-4" />
+                    <span>{currentUser.username}</span>
+                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${getAccessModeConfig(currentUser.access_mode).className}`}>
+                      {getAccessModeConfig(currentUser.access_mode).label}
+                    </span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem>
+                    <CreditCard className="h-4 w-4 mr-2" />
+                    订阅
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <Settings className="h-4 w-4 mr-2" />
+                    订单
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleLogout} className="text-red-600">
+                    <LogOut className="h-4 w-4 mr-2" />
+                    退出
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Button variant="outline" onClick={() => setAuthOpen(true)} className="flex items-center gap-2">
+                <User className="h-4 w-4" />
+                登录
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
+
       {/* 三列布局改为两列布局 - 使用flex布局，左右固定，中间滚动 */}
-      <div className="flex-1 flex gap-4 px-4 pb-4 min-h-0">
+      <div className="flex-1 flex gap-4 px-8 pb-4 min-h-0">
         
         {/* 左侧：社群信息 - 固定宽度，使用sticky定位 */}
         <div className="w-80 flex-shrink-0 sticky top-0 h-fit max-h-screen">
@@ -2021,42 +2057,78 @@ export default function GroupDetailPage() {
                   <div className="flex-1">
                     <h2 className="text-lg font-bold text-gray-900 mb-1">{group.name}</h2>
                     <div className="flex items-center gap-2">
-                      {getTypeBadge(group.type)}
-                      {getStatusBadge(group.status)}
+                      {getAccessTypeBadge()}
+                      {getAuthExpiryBadge()}
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3 text-sm">
-                  {group.join_time && (
-                    <div>
-                      <span className="text-gray-500 block">加入时间</span>
-                      <span className="text-gray-900 font-medium">{formatDate(group.join_time)}</span>
-                    </div>
-                  )}
-                  {group.expiry_time && (
-                    <div>
-                      <span className="text-gray-500 block">到期时间</span>
-                      <span className={
-                        group.status === 'expiring_soon' ? 'text-yellow-600 font-medium' :
-                        group.status === 'expired' ? 'text-red-600 font-medium' : 'text-gray-900 font-medium'
-                      }>
-                        {formatDate(group.expiry_time)}
-                      </span>
-                    </div>
-                  )}
-                  {groupStats && (
-                    <div>
-                      <span className="text-gray-500 block">本地话题数</span>
-                      <span className="text-blue-600 font-semibold">{groupStats.topics_count}</span>
-                    </div>
-                  )}
-                </div>
-
+                <div className="flex flex-wrap gap-2">
+                {currentUser?.allowed_groups?.[groupId]?.joined && (
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <Badge variant="outline" className="text-gray-500 border-gray-200">
+                      授权
+                    </Badge>
+                    <span className="text-gray-700">
+                      {formatDate(currentUser.allowed_groups[groupId].joined)}
+                    </span>
+                  </div>
+                )}
+                {currentUser?.allowed_groups?.[groupId]?.expiry && (
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <Badge variant="outline" className="text-gray-500 border-gray-200">
+                      到期
+                    </Badge>
+                    <span className={
+                      new Date(currentUser.allowed_groups[groupId].expiry) < new Date()
+                        ? 'text-red-600'
+                        : 'text-gray-700'
+                    }>
+                      {formatDate(currentUser.allowed_groups[groupId].expiry)}
+                    </span>
+                  </div>
+                )}
+              </div>
                 
               </CardContent>
             </ScrollArea>
           </Card>
+
+          {/* 定价卡片 */}
+          {groupProduct && (
+            <Card className="border border-gray-200 shadow-none mt-4">
+              <CardContent className="p-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">订阅定价</h3>
+                <div className="space-y-2">
+                  {groupProduct.price_yearly && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">年付</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-base font-bold text-green-600">¥{groupProduct.price_yearly}</span>
+                        {groupProduct.original_price && (
+                          <span className="text-xs text-gray-400 line-through">¥{groupProduct.original_price}</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {groupProduct.price_quarterly && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">季付</span>
+                      <span className="text-base font-bold text-green-600">¥{groupProduct.price_quarterly}</span>
+                    </div>
+                  )}
+                  {groupProduct.price_monthly && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">月付</span>
+                      <span className="text-base font-bold text-green-600">¥{groupProduct.price_monthly}</span>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+      
+
         </div>
 
         {/* 中间：话题和日志 - 可滚动区域 */}
@@ -2071,7 +2143,7 @@ export default function GroupDetailPage() {
                 </TabsTrigger>
                 <TabsTrigger value="logs" className="flex items-center gap-2">
                   <FileText className="h-4 w-4" />
-                  任务日志
+                  AI大模型（待开发）
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -2203,6 +2275,16 @@ export default function GroupDetailPage() {
           </Tabs>
         </div>
       </div>
+      <AuthDialog
+        open={authOpen}
+        onOpenChange={setAuthOpen}
+        onAuthSuccess={async () => {
+          try {
+            const user = await apiClient.getMe();
+            setCurrentUser({ id: user.id, username: user.username, access_mode: user.access_mode, allowed_groups: user.allowed_groups });
+          } catch { /* ignore */ }
+        }}
+      />
 
       </div>
   );

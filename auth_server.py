@@ -24,6 +24,9 @@ from pydantic import BaseModel, Field, field_validator
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
 # =========================
 # 配置
 # =========================
@@ -167,15 +170,21 @@ def is_expired(expire_at: str | None) -> bool:
         return True  # 解析失败，视为已过期
 
 def get_user_allowed_groups(user_id: int) -> dict:
-    """获取用户有权限的群组及其到期日"""
+    """获取用户有权限的群组及其到期日和加入时间"""
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT group_id, expire_at FROM group_permissions WHERE user_id = ?", 
+            "SELECT group_id, expire_at, granted_at FROM group_permissions WHERE user_id = ?", 
             (user_id,)
         ).fetchall()
-        # 返回 {group_id: expire_at} 的映射
-        return {r["group_id"]: r["expire_at"] for r in rows}
+        # 返回 {group_id: {"expiry": expire_at, "joined": granted_at}} 的映射
+        return {
+            r["group_id"]: {
+                "expiry": r["expire_at"],
+                "joined": r["granted_at"]
+            } 
+            for r in rows
+        }
     finally:
         conn.close()
 
@@ -241,7 +250,7 @@ def extract_group_id(path: str) -> Optional[int]:
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=20)
     email: str = Field(..., description="邮箱")
-    phone: str = Field(..., description="手机号")
+    phone: Optional[str] = Field(None, description="手机号")
     password: str = Field(..., min_length=6)
 
     @field_validator("email")
@@ -280,6 +289,48 @@ class UserInfo(BaseModel):
     allowed_groups: dict  # 改为 dict，key 是 group_id，value 是到期日
 
 # =========================
+# 群组商品相关模型
+# =========================
+
+class GroupProductCreate(BaseModel):
+    group_id: int = Field(..., description="群组ID")
+    name: str = Field(..., min_length=1, max_length=100)
+    price_monthly: float = Field(default=0, ge=0)
+    price_quarterly: Optional[float] = Field(None, ge=0)
+    price_yearly: Optional[float] = Field(None, ge=0)
+    original_price: Optional[float] = Field(None, ge=0)
+    is_visible: bool = Field(default=True)
+    cover_image: Optional[str] = None
+
+
+class GroupProductUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    price_monthly: Optional[float] = Field(None, ge=0)
+    price_quarterly: Optional[float] = Field(None, ge=0)
+    price_yearly: Optional[float] = Field(None, ge=0)
+    original_price: Optional[float] = Field(None, ge=0)
+    is_visible: Optional[bool] = None
+    cover_image: Optional[str] = None
+
+
+class GroupProductResponse(BaseModel):
+    id: int
+    group_id: int
+    name: str
+    price_monthly: float
+    price_quarterly: Optional[float]
+    price_yearly: Optional[float]
+    original_price: Optional[float]
+    is_visible: bool
+    cover_image: Optional[str]
+    created_at: str
+
+
+class OrderCreate(BaseModel):
+    group_id: int
+    subscription_type: str = Field(..., pattern="^(monthly|quarterly|yearly|permanent)$")
+
+# =========================
 # FastAPI 应用
 # =========================
 
@@ -292,6 +343,434 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 创建图片目录
+IMAGES_DIR = Path(__file__).parent / "images"
+IMAGES_DIR.mkdir(exist_ok=True)
+
+
+# 挂载静态文件目录（让图片可通过URL访问）
+app.mount("/static/images", StaticFiles(directory=str(IMAGES_DIR)), name="images")
+
+# =========================
+# 图片代理 API（解决 CORS 问题）
+# =========================
+
+@app.get("/api/image/{filename}")
+async def proxy_image(filename: str):
+    """图片代理接口，用于解决跨域问题"""
+    file_path = IMAGES_DIR / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="图片不存在")
+    
+    # 安全检查：确保文件在允许的目录内
+    try:
+        file_path.resolve().relative_to(IMAGES_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="禁止访问")
+    
+    # 根据文件扩展名确定 Content-Type
+    ext = file_path.suffix.lower()
+    content_types = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp'
+    }
+    content_type = content_types.get(ext, 'application/octet-stream')
+    
+    # 读取文件内容
+    with open(file_path, 'rb') as f:
+        content = f.read()
+    
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Cache-Control": "public, max-age=86400"  # 缓存1天
+        }
+    )
+
+
+@app.options("/api/image/{filename}")
+async def proxy_image_options(filename: str):
+    """处理 CORS 预检请求"""
+    return Response(
+        content="",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
+
+# =========================
+# 图片管理 API
+# =========================
+
+@app.get("/api/admin/images")
+async def list_images():
+    """获取服务器图片列表（管理员功能）"""
+    # TODO: 添加管理员权限检查
+    
+    try:
+        images = []
+        allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+        
+        for file_path in IMAGES_DIR.iterdir():
+            if file_path.is_file() and file_path.suffix.lower() in allowed_extensions:
+                stat = file_path.stat()
+                images.append({
+                    "filename": file_path.name,
+                    "url": f"/static/images/{file_path.name}",
+                    "size": stat.st_size,
+                    "created_at": datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+                })
+        
+        # 按创建时间倒序排列
+        images.sort(key=lambda x: x["created_at"], reverse=True)
+        
+        return {"images": images, "total": len(images)}
+    except Exception as e:
+        raise HTTPException(500, f"获取图片列表失败: {str(e)}")
+
+
+
+# =========================
+# 群组商品管理 API（管理员）
+# =========================
+
+@app.post("/api/admin/group-products", response_model=GroupProductResponse)
+async def create_group_product(req: GroupProductCreate, request: Request):
+    """创建群组商品"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor = conn.execute(
+            """INSERT INTO group_products 
+               (group_id, name, price_monthly, price_quarterly, price_yearly, 
+                original_price, is_visible, cover_image, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (req.group_id, req.name, req.price_monthly, 
+             req.price_quarterly, req.price_yearly, req.original_price, 
+             req.is_visible, req.cover_image, now)
+        )
+        conn.commit()
+        product_id = cursor.lastrowid
+        
+        # 返回创建的记录
+        row = conn.execute("SELECT * FROM group_products WHERE id = ?", (product_id,)).fetchone()
+        return dict(row)
+    except sqlite3.IntegrityError:
+        raise HTTPException(400, f"群组 {req.group_id} 已存在商品记录")
+    except Exception as e:
+        raise HTTPException(500, f"创建失败: {str(e)}")
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/group-products")
+async def list_all_group_products(request: Request):
+    """获取所有群组商品（管理用，包含隐藏的）"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM group_products ORDER BY created_at DESC"
+        ).fetchall()
+        return {"products": [dict(r) for r in rows], "total": len(rows)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/group-products/{group_id}", response_model=GroupProductResponse)
+async def get_group_product(group_id: int, request: Request):
+    """获取单个群组商品详情"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM group_products WHERE group_id = ?", (group_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "群组商品不存在")
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@app.put("/api/admin/group-products/{group_id}", response_model=GroupProductResponse)
+async def update_group_product(group_id: int, req: GroupProductUpdate, request: Request):
+    """更新群组商品"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        # 检查是否存在
+        existing = conn.execute(
+            "SELECT * FROM group_products WHERE group_id = ?", (group_id,)
+        ).fetchone()
+        if not existing:
+            raise HTTPException(404, "群组商品不存在")
+        
+        # 构建更新语句
+        updates = []
+        values = []
+        for field in ["name", "description", "price_monthly", "price_quarterly", 
+                      "price_yearly", "original_price", "is_visible", "cover_image"]:
+            value = getattr(req, field, None)
+            if value is not None:
+                updates.append(f"{field} = ?")
+                values.append(value)
+        
+        if not updates:
+            return dict(existing)
+        
+        values.append(group_id)
+        
+        conn.execute(
+            f"UPDATE group_products SET {', '.join(updates)} WHERE group_id = ?",
+            values
+        )
+        conn.commit()
+        
+        # 返回更新后的记录
+        row = conn.execute(
+            "SELECT * FROM group_products WHERE group_id = ?", (group_id,)
+        ).fetchone()
+        return dict(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"更新失败: {str(e)}")
+    finally:
+        conn.close()
+
+
+@app.delete("/api/admin/group-products/{group_id}")
+async def delete_group_product(group_id: int, request: Request):
+    """删除群组商品"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        result = conn.execute(
+            "DELETE FROM group_products WHERE group_id = ?", (group_id,)
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            raise HTTPException(404, "群组商品不存在")
+        return {"success": True, "message": f"已删除群组 {group_id} 的商品记录"}
+    finally:
+        conn.close()
+
+# =========================
+# 用户端群组商品 API
+# =========================
+
+@app.get("/api/groups/products")
+async def get_visible_group_products(request: Request):
+    """获取可购买的群组列表（用户端，只显示 is_visible=1）"""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT group_id, name, price_monthly, price_quarterly, 
+                      price_yearly, original_price, cover_image
+               FROM group_products 
+               WHERE is_visible = 1 
+               ORDER BY created_at DESC"""
+        ).fetchall()
+        return {"products": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.get("/api/groups/products/{group_id}")
+async def get_group_product_detail(group_id: int, request: Request):
+    """获取群组商品详情（用户端）"""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            """SELECT group_id, name, price_monthly, price_quarterly, 
+                      price_yearly, original_price, cover_image
+               FROM group_products 
+               WHERE group_id = ? AND is_visible = 1""",
+            (group_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "群组商品不存在或已下架")
+        return dict(row)
+    finally:
+        conn.close()
+
+
+# =========================
+# 订单 API
+# =========================
+
+class OrderResponse(BaseModel):
+    order_id: str
+    group_id: int
+    group_name: str
+    subscription_type: str
+    amount: float
+    status: str
+    created_at: str
+
+
+@app.post("/api/orders/create", response_model=OrderResponse)
+async def create_order(req: OrderCreate, request: Request):
+    """创建订单"""
+    user = _authenticate(request)
+    if not user:
+        raise HTTPException(401, "未登录")
+    
+    conn = _get_conn()
+    try:
+        # 1. 获取群组价格
+        product = conn.execute(
+            "SELECT * FROM group_products WHERE group_id = ? AND is_visible = 1",
+            (req.group_id,)
+        ).fetchone()
+        if not product:
+            raise HTTPException(404, "群组商品不存在或已下架")
+        
+        # 2. 计算金额
+        price_map = {
+            "monthly": product["price_monthly"],
+            "quarterly": product["price_quarterly"],
+            "yearly": product["price_yearly"],
+            "permanent": product["price_yearly"] * 3 if product["price_yearly"] else 0,  # 永久=3年
+        }
+        amount = price_map.get(req.subscription_type, 0)
+        
+        if amount <= 0:
+            raise HTTPException(400, "无效的订阅类型或价格未设置")
+        
+        # 3. 生成订单ID
+        import uuid
+        order_id = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:6].upper()}"
+        
+        # 4. 创建订单记录（需要先创建 orders 表）
+        # TODO: 实现 orders 表和订单逻辑
+        
+        return OrderResponse(
+            order_id=order_id,
+            group_id=req.group_id,
+            group_name=product["name"],
+            subscription_type=req.subscription_type,
+            amount=amount,
+            status="pending",
+            created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/api/orders/my")
+async def get_my_orders(request: Request):
+    """获取我的订单列表"""
+    user = _authenticate(request)
+    if not user:
+        raise HTTPException(401, "未登录")
+    
+    # TODO: 实现
+    return {"orders": []}
+
+
+# =========================
+# 管理员 API
+# =========================
+
+@app.get("/api/admin/users")
+async def admin_list_users(request: Request):
+    """获取所有用户列表"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, username, email, phone, access_mode, created_at FROM users ORDER BY created_at DESC"
+        ).fetchall()
+        return {"users": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.put("/api/admin/users/{user_id}/access-mode")
+async def admin_update_user_access_mode(user_id: int, data: dict, request: Request):
+    """更新用户权限"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE users SET access_mode = ? WHERE id = ?",
+            (data.get("access_mode", "free"), user_id)
+        )
+        conn.commit()
+        return {"success": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/subscriptions")
+async def admin_list_subscriptions(request: Request):
+    """获取所有订阅记录"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT gp.user_id, gp.group_id, gp.granted_at, gp.expire_at, 
+                   gp.subscription_type, u.username, prod.name as group_name
+            FROM group_permissions gp
+            LEFT JOIN users u ON gp.user_id = u.id
+            LEFT JOIN group_products prod ON gp.group_id = prod.group_id
+            ORDER BY gp.granted_at DESC
+        """).fetchall()
+        return {"subscriptions": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/grant-subscription")
+async def admin_grant_subscription(data: dict, request: Request):
+    """管理员授权订阅"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        granted_at = data.get("granted_at") or datetime.now().strftime("%Y-%m-%d")
+        conn.execute(
+            """INSERT OR REPLACE INTO group_permissions 
+            (user_id, group_id, expire_at, subscription_type, granted_at)
+            VALUES (?, ?, ?, ?, ?)""",
+            (data["user_id"], data["group_id"], data["expire_at"], data.get("subscription_type", "monthly"), granted_at)
+        )
+
+        conn.commit()
+        return {"success": True}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/admin/subscriptions/{user_id}/{group_id}")
+async def admin_revoke_subscription(user_id: int, group_id: int, request: Request):
+    """撤销用户订阅"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "DELETE FROM group_permissions WHERE user_id = ? AND group_id = ?",
+            (user_id, group_id)
+        )
+        conn.commit()
+        return {"success": True}
+    finally:
+        conn.close()
+
+
+
+
 
 # httpx 异步客户端（复用连接池）
 _http_client = httpx.AsyncClient(timeout=60.0)
@@ -311,14 +790,14 @@ async def register(req: RegisterRequest):
         # 检查邮箱
         if conn.execute("SELECT id FROM users WHERE email = ?", (req.email,)).fetchone():
             raise HTTPException(400, "邮箱已被注册")
-        # 检查手机号
-        if conn.execute("SELECT id FROM users WHERE phone = ?", (req.phone,)).fetchone():
+        # 检查手机号（如果提供了）
+        if req.phone and conn.execute("SELECT id FROM users WHERE phone = ?", (req.phone,)).fetchone():
             raise HTTPException(400, "手机号已被注册")
 
         hashed = hash_password(req.password)
         cur = conn.execute(
-            "INSERT INTO users (username, password_hash, email, phone) VALUES (?, ?, ?, ?)",
-            (req.username, hashed, req.email, req.phone, 'free'),
+            "INSERT INTO users (username, password_hash, email, phone, access_mode) VALUES (?, ?, ?, ?, ?)",
+            (req.username, hashed, req.email, req.phone or '', 'free'),
         )
         conn.commit()
         user_id = cur.lastrowid
@@ -450,9 +929,18 @@ def _authenticate(request: Request) -> Optional[dict]:
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy(request: Request, path: str):
-    # 0. 公开端点跳过认证
-    if "/api/proxy" in f"/{path}":
-        # 直接转发
+    # 0. 公开端点跳过认证（直接转发）
+    public_paths = [
+        "/api/proxy-image",      # 图片代理（需要cookie认证，不需要用户登录）
+        "/api/image",            # 图片代理（解决CORS问题，公开访问）
+        "/api/auth/register",     # 用户注册
+        "/api/auth/login",        # 用户登录
+        "/api/health",            # 健康检查
+        "/api/groups/products",   # 商品列表（公开）
+    ]
+    
+    if any(pub_path in f"/{path}" for pub_path in public_paths):
+        # 直接转发，不进行用户认证
         upstream_url = f"{UPSTREAM_URL}/{path}"
         if request.url.query:
             upstream_url += f"?{request.url.query}"
@@ -476,24 +964,32 @@ async def proxy(request: Request, path: str):
     user = _authenticate(request)
     if not user:
         return JSONResponse({"detail": "未登录或登录已过期"}, status_code=401)
-
-    # 2. Group 权限检查（免费用户可访问所有群组）
+    
+    # 2. 管理员权限检查
+    if "/api/admin/" in f"/{path}":
+        if user["access_mode"] != "admin":
+            return JSONResponse({"detail": "需要管理员权限"}, status_code=403)
+    
+    # 3. Group 权限检查（免费用户可访问所有群组）
     group_id = extract_group_id(f"/{path}")
     if group_id is not None:
         if user["access_mode"] == "vip":
             # VIP用户可以访问所有群组，无需检查
             pass
+        elif user["access_mode"] == "admin":
+            # 管理员可以访问所有群组，无需检查
+            pass
         elif user["access_mode"] == "free":
             # 免费用户可以访问所有群组（但内容会被过滤）
             pass
-        elif user["access_mode"] == "paid":
-            # 付费用户可以访问所有群组（未授权群组的内容会被过滤）
+        elif user["access_mode"] == "client":
+            # client用户可以访问所有群组（未授权群组的内容会被过滤）
             pass
         else:
             # 未知权限模式，拒绝访问
             return JSONResponse({"detail": "无效的权限模式"}, status_code=403)
 
-    # 3. 构建转发请求
+    # 4. 构建转发请求
     upstream_url = f"{UPSTREAM_URL}/{path}"
     if request.url.query:
         upstream_url += f"?{request.url.query}"
@@ -510,7 +1006,7 @@ async def proxy(request: Request, path: str):
     # 去掉 Authorization，main.py 不需要
     forward_headers.pop("Authorization", None)
 
-    # 4. 转发请求
+    # 5. 转发请求
     try:
         upstream_resp = await _http_client.request(
             method=request.method,
@@ -522,59 +1018,35 @@ async def proxy(request: Request, path: str):
         return JSONResponse({"detail": "后端服务不可用"}, status_code=502)
     except httpx.TimeoutException:
         return JSONResponse({"detail": "后端服务响应超时"}, status_code=504)
-
-    # 5. 内容过滤（免费用户/隔日用户）
-    response_content_type = upstream_resp.headers.get("content-type", "")
-
-    if "application/json" in response_content_type:
-        should_filter = False
-        filter_mode = "free"
-        
-        # 判断是否需要过滤
-        if user["access_mode"] == "free":
-            # 免费用户：所有群组都需要过滤（7天限制）
-            should_filter = True
-            filter_mode = "free"
-        elif user["access_mode"] == "vip":
-            # VIP用户：不进行任何过滤
-            should_filter = False
-        elif user["access_mode"] == "paid":
-            # 付费用户：检查群组授权状态和有效期
-            if group_id is not None:
-                # 检查是否在授权列表中
-                if group_id in user["allowed_groups"]:
-                    expire_at = user["allowed_groups"][group_id]
-                    # 检查是否在有效期内
-                    if not is_expired(expire_at):
-                        # 授权有效期内：不过滤
-                        should_filter = False
-                    else:
-                        # 授权已过期：按免费用户处理
-                        should_filter = True
-                        filter_mode = "free"
-                else:
-                    # 未授权的群组：按免费用户处理
-                    should_filter = True
-                    filter_mode = "free"
-            else:
-                # 没有群组ID（如群组列表），不进行内容过滤
-                should_filter = False
-        else:
-            # 未知权限模式，拒绝访问
-            return JSONResponse({"detail": "无效的权限模式"}, status_code=403)
-        
-        if should_filter:
-            filtered = _apply_delayed_filter(f"/{path}", upstream_resp, filter_mode)
-            if filtered is not None:
-                return filtered
     
-    # 6. 对 /api/groups 接口做 Group 权限过滤（免费用户显示所有群组）
-    # 所有用户都可以看到所有群组，不进行过滤
-    # 权限区别在于访问群组内容时的过滤
-
-
-
-    # 7. 非过滤场景，原样返回响应
+    # 6. 内容过滤（根据用户类型）
+    # VIP 和 admin 用户不进行内容过滤
+    if user["access_mode"] in ("vip", "admin"):
+        return _build_response(upstream_resp)
+    
+    # free 用户：过滤所有群组的 7 天内内容
+    if user["access_mode"] == "free":
+        print(f"[DEBUG] Free user filtering, path: /{path}")
+        filtered_resp = _apply_delayed_filter(f"/{path}", upstream_resp, "free")
+        print(f"[DEBUG] Filter result: {filtered_resp is not None}")
+        if filtered_resp:
+            return filtered_resp
+        return _build_response(upstream_resp)
+    
+    # client 用户：检查是否有群组权限
+    if user["access_mode"] == "client":
+        allowed_groups = user.get("allowed_groups", {})
+        if group_id and group_id in allowed_groups:
+            # 有权限的群组，不过滤
+            return _build_response(upstream_resp)
+        else:
+            # 无权限的群组，应用 7 天过滤
+            filtered_resp = _apply_delayed_filter(f"/{path}", upstream_resp, "free")
+            if filtered_resp:
+                return filtered_resp
+            return _build_response(upstream_resp)
+    
+    # 7. 默认返回
     return _build_response(upstream_resp)
 
 
