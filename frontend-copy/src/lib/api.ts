@@ -221,7 +221,15 @@ class ApiClient {
     localStorage.removeItem('user_info');
   }
 
-  getUserInfo(): { id: number; username: string; access_mode: string; expire_at: string | null; allowed_groups: Record<number, string> } | null {
+  getUserInfo(): { 
+  id: number; 
+  username: string; 
+  access_mode: 'admin' | 'vip' | 'client' | 'free';  // 更新类型
+  expire_at: string | null; 
+  allowed_groups: Record<number, { expiry: string; joined: string }> 
+} | null
+  
+  {
     if (typeof window === 'undefined') return null;
     try {
       const raw = localStorage.getItem('user_info');
@@ -230,13 +238,13 @@ class ApiClient {
       return null;
     }
   }
-  setUserInfo(info: { id: number; username: string; access_mode: string; expire_at: string | null; allowed_groups: Record<number, string> }) {
+  setUserInfo(info: { id: number; username: string; access_mode: string; expire_at: string | null; allowed_groups: Record<number, { expiry: string; joined: string }> }) {
     if (typeof window === 'undefined') return;
     localStorage.setItem('user_info', JSON.stringify(info));
   }
 
 
-private async request<T>(
+public async request<T>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
@@ -858,20 +866,20 @@ private async request<T>(
     username: string;
     email: string;
     phone: string;
-    access_mode: string;
+    access_mode: 'admin' | 'vip' | 'client' | 'free';  // 更新类型
     expire_at: string | null;
     created_at: string;
-    allowed_groups: Record<number, string>;
+    allowed_groups: Record<number, { expiry: string; joined: string }>;
   }> {
     const res = await this.request<{
       id: number;
       username: string;
       email: string;
       phone: string;
-      access_mode: string;
+      access_mode: 'admin' | 'vip' | 'client' | 'free';  // ✅ 更新为字面量类型
       expire_at: string | null;
       created_at: string;
-      allowed_groups: Record<number, string>;
+      allowed_groups: Record<number, { expiry: string; joined: string }>;
     }>('/api/auth/me');
     this.setUserInfo(res);
     return res;

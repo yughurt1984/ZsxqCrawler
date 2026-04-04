@@ -10,13 +10,38 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { MessageSquare, Crown, UserPlus, LogOut, RefreshCw, Trash2 } from 'lucide-react';
+import { MessageSquare, Crown, UserPlus, LogOut, RefreshCw, Trash2, User, CreditCard, Settings, FileText } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { apiClient, Group, GroupStats, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import SafeImage from './SafeImage';
 import AuthDialog from './AuthDialog';
 import '../styles/group-selector.css';
+
+// access_mode 配置（中文 + 样式）
+const getAccessModeConfig = (mode: string) => {
+  const configs: Record<string, { label: string; className: string }> = {
+    'admin': {
+      label: '管理员',
+      className: 'bg-purple-100 text-purple-700 border-purple-300'
+    },
+    'vip': {
+      label: 'VIP会员',
+      className: 'bg-amber-100 text-amber-700 border-amber-300'
+    },
+    'client': {
+      label: '付费客户',
+      className: 'bg-blue-100 text-blue-700 border-blue-300'
+    },
+    'free': {
+      label: '免费用户',
+      className: 'bg-gray-100 text-gray-700 border-gray-300'
+    }
+  };
+  return configs[mode] || { label: mode, className: 'bg-gray-100 text-gray-700 border-gray-300' };
+};
+
 
 interface GroupSelectorProps {
   onGroupSelected: (group: Group) => void;
@@ -33,8 +58,8 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
   const [accountSelfMap, setAccountSelfMap] = useState<Record<number, AccountSelf | null>>({});
   const [deletingGroups, setDeletingGroups] = useState<Set<number>>(new Set());
   const [authOpen, setAuthOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState<{ id: number; username: string; access_mode: string; allowed_groups: Record<number, string> } | null>(null);
-
+  const [currentUser, setCurrentUser] = useState<{ id: number; username: string; access_mode: string; allowed_groups: Record<number, { expiry: string; joined: string }> } | null>(null);
+  const [groupProducts, setGroupProducts] = useState<Record<number, any>>({});  // 添加这一行
 
 
   useEffect(() => {
@@ -114,15 +139,32 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
         setRetryCount(currentRetryCount);
       }
 
+      // 1. 先加载商品数据
+      let productsMap: Record<number, any> = {};
+      try {
+        const response = await fetch('http://localhost:8209/api/groups/products');
+        const data = await response.json();
+        data.products.forEach((p: any) => {
+          productsMap[p.group_id] = p;
+        });
+        setGroupProducts(productsMap);
+      } catch (e) {
+        console.warn('加载商品数据失败:', e);
+      }
+
+      // 2. 加载群组数据
       const data = await apiClient.getGroups();
 
-      // 检查返回数据（允许为空，显示空态，不再抛错）
+      // 3. 过滤：只显示有商品的群组
+      const filteredGroups = data.groups.filter((group: Group) => 
+        productsMap.hasOwnProperty(group.group_id)
+      );
 
-      setGroups(data.groups);
+      setGroups(filteredGroups);
 
       // 并发拉取每个群组的所属账号用户信息（头像/昵称等）
       try {
-        const selfPromises = data.groups.map(async (group: Group) => {
+        const selfPromises = filteredGroups.map(async (group: Group) => {
           try {
             const res = await apiClient.getGroupAccountSelf(group.group_id);
             return { groupId: group.group_id, self: (res as any)?.self || null };
@@ -142,7 +184,7 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
       }
 
       // 加载每个群组的统计信息
-      const statsPromises = data.groups.map(async (group: Group) => {
+      const statsPromises = filteredGroups.map(async (group: Group) => {
         try {
           const stats = await apiClient.getGroupStats(group.group_id);
           return { groupId: group.group_id, stats };
@@ -189,8 +231,6 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
       setLoading(false);
     }
   };
-
-
 
   const handleRefresh = async () => {
     try {
@@ -254,7 +294,7 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
   // 获取授权状态（包含文字和颜色）
   const getExpiryStatus = (expiryTime?: string): { text: string; colorClass: string } => {
     if (!expiryTime) {
-      return { text: '未授权', colorClass: 'bg-gray-100 text-gray-700' };
+      return { text: '免费', colorClass: 'bg-gray-100 text-gray-700' };
     }
 
     const expiryDate = new Date(expiryTime);
@@ -265,26 +305,68 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
     // 计算剩余天数
     const diffTime = expiryDate.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
+    
     // 已过期
     if (diffDays < 0) {
       return { text: '已过期', colorClass: 'bg-red-100 text-red-700 hover:bg-red-200' };
     }
 
-    // 今日到期
+    // 当天到期
     if (diffDays === 0) {
-      return { text: '今日到期', colorClass: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200' };
+      return { text: '当天到期', colorClass: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200' };
     }
 
-    // 10天内到期
-    if (diffDays <= 10) {
+    // 7天内到期
+    if (diffDays <= 7) {
       return { text: `${diffDays}天后到期`, colorClass: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200' };
     }
 
-    // 未到期（超过10天）
+    // 未到期（超过7天）
     return { text: '未到期', colorClass: 'bg-green-100 text-green-700 hover:bg-green-200' };
   };
 
+  // 获取群组卡片的访问类型标签
+  const getGroupAccessTypeBadge = (groupId: number) => {
+    if (!currentUser) return <Badge className="bg-gray-100 text-gray-700 text-xs px-1.5 py-0.5">免费</Badge>;
+
+    switch (currentUser.access_mode) {
+      case 'admin':
+        return <Badge className="bg-purple-100 text-purple-700 text-xs px-1.5 py-0.5">管理员</Badge>;
+      case 'vip':
+        return <Badge className="bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5">VIP</Badge>;
+      case 'client':
+        // 检查是否被授权访问该群组
+        if (currentUser.allowed_groups && groupId in currentUser.allowed_groups) {
+          return <Badge className="bg-green-100 text-green-700 text-xs px-1.5 py-0.5">已订阅</Badge>;
+        }
+        return <Badge className="bg-gray-100 text-gray-700 text-xs px-1.5 py-0.5">免费</Badge>;
+      case 'free':
+      default:
+        return <Badge className="bg-gray-100 text-gray-700 text-xs px-1.5 py-0.5">免费</Badge>;
+    }
+  };
+
+  // 获取授权到期状态标签（仅客户用户且已授权时显示）
+  const getGroupExpiryBadge = (groupId: number) => {
+    if (!currentUser || currentUser.access_mode !== 'client') return null;
+    if (!currentUser.allowed_groups || !(groupId in currentUser.allowed_groups)) return null;
+
+    const status = getExpiryStatus(currentUser.allowed_groups[groupId].expiry);
+    return <Badge className={`text-xs px-1.5 py-0.5 ${status.colorClass}`}>{status.text}</Badge>;
+  };
+
+  // 获取到期日期显示（仅客户用户且已授权时显示）
+  const getGroupExpiryDate = (groupId: number) => {
+    if (!currentUser || currentUser.access_mode !== 'client') return null;
+    if (!currentUser.allowed_groups || !(groupId in currentUser.allowed_groups)) return null;
+
+    const expiry = currentUser.allowed_groups[groupId].expiry;
+    return (
+      <span className="text-xs text-gray-500">
+        至 {formatDate(expiry)}
+      </span>
+    );
+  };
 
 
   if (loading || isRetrying) {
@@ -343,17 +425,16 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
   }
 
   // 删除网络群组（账号），保留本地群组
-  
   const localGroups = groups
-  .filter((g) => g.source && g.source.includes('local'))
-  .filter((g) => {
-  if (!currentUser) return false;
-  // 所有用户都可以查看所有群组
-  return true;
-});
+    .filter((g) => g.source && g.source.includes('local'))
+    .filter((g) => {
+    if (!currentUser) return false;
+    // 所有用户都可以查看所有群组
+    return true;
+  });
 
 
-    return (
+  return (
     <>
       <div className="min-h-screen bg-background">
         <div className="container mx-auto p-4">
@@ -362,26 +443,45 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
               <div>
                 <h1 className="text-2xl font-bold mb-1">🌟 六便士拾荒的知识库</h1>
                 <p className="text-sm text-muted-foreground">
-                  选择要操作的知识星球群组
+                  选择要操作的群组
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  onClick={handleRefresh}
-                  className="flex items-center gap-2"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  预留控件
-                </Button>
+                <div className="flex items-center gap-2">
                 {currentUser ? (
-                  <>
-                    <span className="text-sm text-muted-foreground">{currentUser.username}</span>
-                    <Button variant="outline" onClick={handleLogout} className="flex items-center gap-2">
-                      <LogOut className="h-4 w-4" />
-                      退出
-                    </Button>
-                  </>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" className="flex items-center gap-2">
+                        <User className="h-4 w-4" />
+                        <span>{currentUser.username}</span>
+                        <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${getAccessModeConfig(currentUser.access_mode).className}`}>
+                          {getAccessModeConfig(currentUser.access_mode).label}
+                        </span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                        {/* 管理后台入口 - 仅管理员可见 */}
+                        {currentUser?.access_mode === 'admin' && (
+                          <DropdownMenuItem onClick={() => router.push('/admin')}>
+                            <Settings className="h-4 w-4 mr-2" />
+                            管理后台
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuItem>
+                          <CreditCard className="h-4 w-4 mr-2" />
+                          订阅
+                        </DropdownMenuItem>
+                        <DropdownMenuItem>
+                          <FileText className="h-4 w-4 mr-2" />
+                          订单
+                        </DropdownMenuItem>
+
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={handleLogout} className="text-red-600">
+                        <LogOut className="h-4 w-4 mr-2" />
+                        退出
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 ) : (
                   <Button variant="outline" onClick={() => setAuthOpen(true)} className="flex items-center gap-2">
                     <UserPlus className="h-4 w-4" />
@@ -389,6 +489,7 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                   </Button>
                 )}
               </div>
+
             </div>
           </div>
 
@@ -414,6 +515,8 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-4">
               {localGroups.map((group) => {
                 const stats = groupStats[group.group_id];
+                const product = groupProducts[group.group_id];
+
                 return (
                   <div
                     key={group.group_id}
@@ -423,7 +526,18 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                     {/* 群组封面 */}
                     <div className="w-[200px] h-[200px]">
                       <SafeImage
-                        src={group.background_url}
+                        src={(() => {
+                          if (product?.cover_image) {
+                            if (product.cover_image.startsWith('http')) {
+                              return product.cover_image;
+                            } else {
+                              // 使用代理 API 解决 CORS 问题
+                              const filename = product.cover_image.replace('/static/images/', '');
+                              return `http://localhost:8209/api/image/${filename}`;
+                            }
+                          }
+                          return group.background_url;
+                        })()}
                         alt={group.name}
                         className="w-full h-full object-cover"
                         fallbackClassName="w-full h-full bg-gradient-to-br"
@@ -437,6 +551,8 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                       <h3 className="text-sm font-semibold text-gray-900 line-clamp-1 mb-1.5">
                         {group.name}
                       </h3>
+                      
+                      {/* 第一行：群主信息 + 订阅类型标签 */}
                       <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
                         {group.owner && (
                           <div className="flex items-center gap-1">
@@ -444,49 +560,12 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                             <span className="truncate max-w-[60px]">{group.owner.name}</span>
                           </div>
                         )}
-                        {stats && (
-                          <div className="flex items-center gap-1">
-                            <MessageSquare className="h-3 w-3" />
-                            <span>{stats.topics_count || 0}</span>
-                          </div>
-                        )}
+                        {getGroupAccessTypeBadge(group.group_id)}
                       </div>
+                      {/* 第二行：到期状态标签 + 到期日期 */}
                       <div className="flex items-center justify-between">
-                      {/* 付费类型 Badge */}
-                      <Badge 
-                        variant={currentUser?.access_mode === 'vip' ? 'default' : 
-                                currentUser?.access_mode === 'paid' && currentUser.allowed_groups[group.group_id] ? 'default' : 
-                                'secondary'}
-                        className={`text-xs px-1.5 py-0 h-5 ${
-                          currentUser?.access_mode === 'vip' ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' :
-                          currentUser?.access_mode === 'paid' && currentUser.allowed_groups[group.group_id]? 'bg-blue-100 text-blue-700 hover:bg-blue-200' :
-                          'bg-gray-100 text-gray-700'
-                        }`}
-                      >
-                        {currentUser?.access_mode === 'vip' ? 'VIP' :
-                        currentUser?.access_mode === 'paid' ? 
-                          (currentUser.allowed_groups[group.group_id] ? '付费' : '免费') :
-                        '免费'}
-                      </Badge>
-                      
-                      {/* 授权状态 Badge - 仅 paid 用户显示 */}
-                      {currentUser?.access_mode === 'paid' && currentUser.allowed_groups[group.group_id] && (
-                        <Badge 
-                          variant="secondary"
-                          className={`text-xs px-1.5 py-0 h-5 ${
-                            getExpiryStatus(currentUser.allowed_groups[group.group_id]).colorClass
-                          }`}
-                        >
-                          {getExpiryStatus(currentUser.allowed_groups[group.group_id]).text}
-                        </Badge>
-                      )}
-                      
-                      {/* 到期时间显示 - 仅 paid 用户且已授权时显示 */}
-                      {currentUser?.access_mode === 'paid' && currentUser.allowed_groups[group.group_id] && (
-                        <span className="text-xs text-gray-500">
-                          至 {formatDate(currentUser.allowed_groups[group.group_id])}
-                        </span>
-                      )}      
+                        {getGroupExpiryBadge(group.group_id)}
+                        {getGroupExpiryDate(group.group_id)}
                       </div>
 
                     </div>
