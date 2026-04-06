@@ -21,9 +21,9 @@ from zsxq_file_database import ZSXQFileDatabase
 
 class ZSXQFileDownloader:
     """知识星球文件下载器"""
-    
+    # 修改了单词下载间隔，download_interval:1.0——5.0
     def __init__(self, cookie: str, group_id: str, db_path: str = None, download_dir: str = "downloads",
-                 download_interval: float = 1.0, long_sleep_interval: float = 60.0,
+                 download_interval: float = 5.0, long_sleep_interval: float = 60.0,
                  files_per_batch: int = 10, download_interval_min: float = None,
                  download_interval_max: float = None, long_sleep_interval_min: float = None,
                  long_sleep_interval_max: float = None, wecom_webhook=None, log_callback=None):
