@@ -3079,6 +3079,46 @@ async def get_local_video(group_id: str, video_path: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取视频失败: {str(e)}")
 
+@app.get("/api/groups/{group_id}/files/{file_path:path}")
+async def get_local_file(group_id: str, file_path: str):
+    """获取群组本地下载的文件"""
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    
+    try:
+        path_manager = get_db_path_manager()
+        group_dir = path_manager.get_group_dir(group_id)
+        downloads_dir = Path(group_dir) / "downloads"
+        
+        # 兼容处理
+        if os.path.isabs(file_path):
+            for subdir in ['downloads', 'column_downloads']:
+                if subdir in file_path:
+                    parts = file_path.split(subdir)
+                    if len(parts) > 1:
+                        file_path = parts[-1].lstrip('/\\')
+                        break
+            if os.path.isabs(file_path):
+                file_path = os.path.basename(file_path)
+        
+        # 兼容旧的 column_downloads/ 前缀
+        if file_path.startswith('column_downloads/'):
+            file_path = file_path.replace('column_downloads/', '')
+        
+        file_full = (downloads_dir / file_path).resolve()
+        if not str(file_full).startswith(str(downloads_dir.resolve())):
+            raise HTTPException(status_code=403, detail="禁止访问该路径")
+        
+        if not file_full.exists():
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        content_type = mimetypes.guess_type(str(file_full))[0] or 'application/octet-stream'
+        return FileResponse(path=str(file_full), media_type=content_type, filename=file_full.name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取文件失败: {str(e)}")
+
 
 @app.get("/api/settings/crawl")
 async def get_crawl_settings():
@@ -4822,7 +4862,9 @@ async def _download_column_file(group_id: str, file_id: int, file_name: str, fil
     if os.path.exists(local_path):
         existing_size = os.path.getsize(local_path)
         if existing_size == file_size or (file_size == 0 and existing_size > 0):
-            db.update_file_download_status(file_id, 'completed', local_path)
+            # 保存相对路径：downloads/{file_name}
+            relative_path = f"downloads/{file_name}"
+            db.update_file_download_status(file_id, 'completed', relative_path)
             if task_id:
                 add_task_log(task_id, f"         ⏭️ 文件已存在，跳过下载 ({existing_size/(1024*1024):.2f}MB)")
             return "skipped"
@@ -4893,7 +4935,9 @@ async def _download_column_file(group_id: str, file_id: int, file_name: str, fil
                         if chunk:
                             f.write(chunk)
                 
-                db.update_file_download_status(file_id, 'completed', local_path)
+                # 保存相对路径：downloads/{file_name}
+                relative_path = f"downloads/{file_name}"
+                db.update_file_download_status(file_id, 'completed', relative_path)
                 return "downloaded"
             else:
                 last_error = f"HTTP {file_resp.status_code}"
@@ -4940,7 +4984,9 @@ async def _download_column_video(group_id: str, video_id: int, video_size: int, 
     if os.path.exists(local_path):
         existing_size = os.path.getsize(local_path)
         if existing_size > 0:
-            db.update_video_download_status(video_id, 'completed', '', local_path)
+            # 保存相对路径：videos/video_{video_id}.mp4
+            relative_path = f"videos/video_{video_id}.mp4"
+            db.update_video_download_status(video_id, 'completed', '', relative_path)
             if task_id:
                 add_task_log(task_id, f"         ⏭️ 视频已存在，跳过下载 ({existing_size/(1024*1024):.1f}MB)")
             return "skipped"
@@ -5129,7 +5175,9 @@ async def _download_column_video(group_id: str, video_id: int, video_size: int, 
         
         # 检查文件是否成功下载（ffmpeg 可能返回非 0 但文件已成功下载）
         if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
-            db.update_video_download_status(video_id, 'completed', m3u8_url, local_path)
+            # 保存相对路径：videos/video_{video_id}.mp4
+            relative_path = f"videos/video_{video_id}.mp4"
+            db.update_video_download_status(video_id, 'completed', m3u8_url, relative_path)
             final_size = os.path.getsize(local_path)
             log_info(f"视频下载成功: video_id={video_id}, path={local_path}, size={final_size}")
             if task_id:

@@ -1217,6 +1217,38 @@ export default function GroupDetailPage() {
     if (!dateString) return '未知时间';
     try {
       const date = new Date(dateString);
+      const now = new Date();
+      const diffTime = now.getTime() - date.getTime();
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+      // 今天
+      if (diffDays === 0) {
+        return '今天 ' + date.toLocaleTimeString('zh-CN', {
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      }
+
+      // 昨天
+      if (diffDays === 1) {
+        return '昨天 ' + date.toLocaleTimeString('zh-CN', {
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      }
+
+      // 今年
+      if (date.getFullYear() === now.getFullYear()) {
+        return date.toLocaleDateString('zh-CN', {
+          month: '2-digit',
+          day: '2-digit'
+        }) + ' ' + date.toLocaleTimeString('zh-CN', {
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      }
+
+      // 其他年份
       return date.toLocaleString('zh-CN', {
         year: 'numeric',
         month: '2-digit',
@@ -1225,9 +1257,10 @@ export default function GroupDetailPage() {
         minute: '2-digit'
       });
     } catch {
-      return '时间格式错误';
+      return '未知时间';
     }
   };
+
 
   // 格式化获取时间
   const formatImportedTime = (importedAt: string) => {
@@ -1276,7 +1309,7 @@ export default function GroupDetailPage() {
             📢 该内容仅对付费用户开放
           </div>
           <div className="text-sm text-gray-600 mb-2">
-            免费用户仅可查看 7 天前的内容
+            免费用户可查看第5~30天的内容
           </div>
           <div className="text-sm text-blue-600 font-medium">
             升级会员可查看更多
@@ -1288,8 +1321,9 @@ export default function GroupDetailPage() {
         <div className="p-4 w-full max-w-full" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
           <div className="space-y-3 w-full">
             {/* 作者信息和徽章 */}
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-2">
+            <div className="flex items-start justify-between gap-2 sm:gap-3">
+              {/* 左侧：作者信息 */}
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-1 min-w-0">
                 {/* 根据话题类型显示不同的作者信息 */}
                 {topic.type === 'q&a' ? (
                   // 问答类型显示回答者信息
@@ -1300,24 +1334,24 @@ export default function GroupDetailPage() {
                         alt={topicDetail.answer.owner.name}
                         loading="lazy"
                         decoding="async"
-                        className="w-8 h-8 rounded-full object-cover block"
+                        className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover block flex-shrink-0"
                         onError={(e) => {
                           e.currentTarget.src = '/default-avatar.png';
                         }}
                       />
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-900">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                          <span className="text-xs sm:text-sm font-medium text-gray-900">
                             {topicDetail.answer.owner.name}
                           </span>
                           {/* IP信息放在姓名右边 */}
                           {topicDetail.answer.owner.location && (
-                            <span className="text-xs text-gray-400">
+                            <span className="text-[10px] sm:text-xs text-gray-400">
                               来自 {topicDetail.answer.owner.location}
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-gray-500">
+                        <div className="text-[10px] sm:text-xs text-gray-500 mt-0.5">
                           {formatDateTime(topic.create_time)}
                         </div>
                       </div>
@@ -1332,24 +1366,24 @@ export default function GroupDetailPage() {
                         alt={topic.author.name}
                         loading="lazy"
                         decoding="async"
-                        className="w-8 h-8 rounded-full object-cover block"
+                        className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover block flex-shrink-0"
                         onError={(e) => {
                           e.currentTarget.src = '/default-avatar.png';
                         }}
                       />
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-900">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                          <span className="text-xs sm:text-sm font-medium text-gray-900">
                             {topic.author.name}
                           </span>
                           {/* IP信息放在姓名右边 */}
                           {topicDetail?.talk?.owner?.location && (
-                            <span className="text-xs text-gray-400">
+                            <span className="text-[10px] sm:text-xs text-gray-400">
                               来自 {topicDetail.talk.owner.location}
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-gray-500">
+                        <div className="text-[10px] sm:text-xs text-gray-500 mt-0.5">
                           {formatDateTime(topic.create_time)}
                         </div>
                       </div>
@@ -1357,31 +1391,33 @@ export default function GroupDetailPage() {
                   )
                 )}
               </div>
-              <div className="flex flex-col items-end gap-1">
-                {/* 徽章和刷新按钮 */}
-                <div className="flex items-center gap-2">
+
+              {/* 右侧：徽章和获取时间 */}
+              <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                {/* 徽章 */}
+                <div className="flex items-center gap-1 sm:gap-2">
                   {topic.sticky && (
-                    <Badge variant="outline" className="text-xs text-red-600 border-red-200">
+                    <Badge variant="outline" className="text-[10px] sm:text-xs text-red-600 border-red-200 px-1.5 py-0.5">
                       置顶
                     </Badge>
                   )}
                   {topic.digested && (
-                    <Badge variant="outline" className="text-xs text-green-600 border-green-200">
+                    <Badge variant="outline" className="text-[10px] sm:text-xs text-green-600 border-green-200 px-1.5 py-0.5">
                       精华
                     </Badge>
                   )}
-
                 </div>
 
-                {/* 获取时间信息 */}
+                {/* 获取时间信息 - 完全靠右 */}
                 {topic.imported_at && (
-                  <div className="text-xs text-gray-400 flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
+                  <div className="text-[10px] sm:text-xs text-gray-400 flex items-center gap-0.5 sm:gap-1 whitespace-nowrap">
+                    <Clock className="w-2.5 h-2.5 sm:w-3 sm:h-3 flex-shrink-0" />
                     <span>获取于: {formatImportedTime(topic.imported_at)}</span>
                   </div>
                 )}
               </div>
             </div>
+
 
             {/* 话题内容 */}
             <div className="space-y-3 w-full overflow-hidden">
@@ -1517,21 +1553,6 @@ export default function GroupDetailPage() {
               )}
             </div>
 
-            {/* 文章链接（适配 talk.article） */}
-            {topicDetail?.talk?.article && (
-              <div className="bg-blue-50 border border-blue-200 rounded-md p-2 mt-2">
-                <a
-                  href={(topicDetail.talk.article.article_url || topicDetail.talk.article.inline_article_url) as string}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
-                  title={topicDetail.talk.article.title || '查看文章'}
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  {topicDetail.talk.article.title || '查看文章'}
-                </a>
-              </div>
-            )}
 
             {/* 话题图片 */}
             {topicDetail?.talk?.images && topicDetail.talk.images.length > 0 && (
@@ -1546,7 +1567,7 @@ export default function GroupDetailPage() {
             {topicDetail?.talk?.files && topicDetail.talk.files.length > 0 && (
               <div className="space-y-2 w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
                 <div className="space-y-2">
-                  {topicDetail.talk.files.map((file: any) => {
+                  {topicDetail.talk.files.map((file: any, index: number) => {
                     // 根据文件扩展名获取图标组件
                     const getFileIcon = (fileName: string) => {
                       const ext = fileName.split('.').pop()?.toLowerCase();
@@ -1601,7 +1622,7 @@ export default function GroupDetailPage() {
                     const isDownloaded = fileStatus?.is_complete || false;
 
                     return (
-                      <div key={file.file_id} className={`flex items-center gap-3 p-3 rounded-lg border ${
+                      <div key={`file-${index}`} className={`flex items-center gap-3 p-3 rounded-lg border ${
                         isDownloaded
                           ? 'bg-green-50 border-green-200'
                           : 'bg-gray-50 border-gray-200'
@@ -1644,22 +1665,31 @@ export default function GroupDetailPage() {
                             size="sm"
                             variant="outline"
                             onClick={async () => {
-                              // 点击时检查文件状态
-                              const latestStatus = await getFileStatus(file.file_id, file.name, file.size);
+                              // 直接检查本地文件
+                              try {
+                                const checkRes = await fetch(
+                                  `http://localhost:8209/api/files/check-local-simple/${groupId}?file_name=${encodeURIComponent(file.name)}&file_size=${file.size}`
+                                ).then(r => r.json());
 
-                              if (latestStatus?.download_status === 'not_collected') {
-                                toast.error('文件未收集，请先运行文件收集任务');
-                                return;
+                                if (checkRes.exists) {
+                                  // 本地文件存在，直接下载
+                                  toast.success(`正在打开: ${checkRes.matched_file}`);
+                                  window.open(
+                                    `http://localhost:8209/api/files/download-local/${groupId}?file_name=${encodeURIComponent(file.name)}&file_size=${file.size}`,
+                                    '_blank'
+                                  );
+                                  return;
+                                }
+
+                                console.log('文件匹配失败:', checkRes);
+                              } catch (e) {
+                                console.error('检查本地文件失败:', e);
                               }
 
-                              // 如果文件已经下载完成，显示提示
-                              if (latestStatus?.is_complete) {
-                                toast.info(`文件已存在: ${latestStatus.local_path}`);
-                                return;
-                              }
-
-                              downloadSingleFile(file.file_id, file.name, file.size);
+                              // 本地文件不存在
+                              toast.error('本地文件不存在，请联系管理员');
                             }}
+
                             disabled={isDownloading}
                             className="flex items-center gap-1"
                           >
@@ -1697,26 +1727,7 @@ export default function GroupDetailPage() {
                     <h4 className="text-xs font-medium text-gray-600">
                       评论 ({topicDetail.comments_count || 0})
                     </h4>
-                    {/* 获取更多评论按钮 */}
-                    {(topicDetail.comments_count || 0) > 8 && (
-                      <button type="button"
-                        onClick={() => fetchMoreComments(topic.topic_id)}
-                        disabled={fetchingComments.has(topic.topic_id)}
-                        className="text-xs text-blue-600 hover:text-blue-800 disabled:text-gray-400 flex items-center gap-1"
-                      >
-                        {fetchingComments.has(topic.topic_id) ? (
-                          <>
-                            <RefreshCw className="w-3 h-3 animate-spin" />
-                            获取中...
-                          </>
-                        ) : (
-                          <>
-                            <RefreshCw className="w-3 h-3" />
-                            获取更多
-                          </>
-                        )}
-                      </button>
-                    )}
+                    
                   </div>
                   <div className="space-y-2">
                     {commentsToShow.map((comment: any) => (
@@ -1859,15 +1870,6 @@ export default function GroupDetailPage() {
               </div>
             </div>
 
-            {/* 点赞信息 */}
-            {topicDetail?.latest_likes && topicDetail.latest_likes.length > 0 && (
-              <div className="mt-2 text-xs text-gray-500">
-                <span>
-                  {topicDetail.latest_likes.map((like: any) => like.owner.name).join('、')}
-                  {topicDetail.latest_likes.length === 1 ? ' 觉得很赞' : ' 等人觉得很赞'}
-                </span>
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -1965,23 +1967,23 @@ export default function GroupDetailPage() {
 
   return (
     <div className="h-screen bg-gray-50 overflow-hidden flex flex-col">
-      <div className="flex-shrink-0 px-8 py-4">
-        <div className="flex items-center justify-between gap-4">
+      <div className="flex-shrink-0 px-3 sm:px-6 md:px-8 py-2.5 sm:py-3 md:py-4">
+        <div className="flex items-center justify-between gap-1.5 sm:gap-2 md:gap-4">
           {/* 左侧：返回按钮 */}
           <Button
             variant="ghost"
             onClick={() => router.push('/')}
-            className="flex items-center gap-2 flex-shrink-0"
+            className="flex items-center gap-1 sm:gap-2 flex-shrink-0 h-8 sm:h-9 px-2 sm:px-3"
           >
-            <ArrowLeft className="h-4 w-4" />
-            返回群组列表
+            <ArrowLeft className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+            <span className="text-xs sm:text-sm hidden md:inline">返回群组列表</span>
+            <span className="text-xs md:hidden">返回</span>
           </Button>
 
           {/* 中间：搜索栏 */}
-          <div className="flex items-center gap-4 flex-1 justify-center max-w-2xl mx-auto">
-            
+          <div className="flex items-center gap-1.5 sm:gap-2 md:gap-4 flex-1 max-w-xs sm:max-w-md md:max-w-2xl">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+              <Search className="absolute left-2.5 sm:left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-3.5 w-3.5 sm:h-4 sm:w-4" />
               <Input
                 placeholder="搜索话题..."
                 value={searchTerm}
@@ -1989,28 +1991,35 @@ export default function GroupDetailPage() {
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="pl-10"
+                className="pl-8 sm:pl-10 h-8 sm:h-9 text-xs sm:text-sm"
               />
             </div>
-            <Button onClick={() => loadTopics()} disabled={topicsLoading}>
-              {topicsLoading ? '加载中...' : '刷新'}
+            <Button
+              onClick={() => loadTopics()}
+              disabled={topicsLoading}
+              className="flex-shrink-0 h-8 sm:h-9 px-2 sm:px-4"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 sm:mr-2 ${topicsLoading ? 'animate-spin' : ''}`} />
+              <span className="text-xs sm:text-sm hidden sm:inline">{topicsLoading ? '加载中...' : '刷新'}</span>
             </Button>
           </div>
 
-          {/* 右侧：用户下拉菜单（独立区域，与首页一致） */}
-          <div className="flex items-center gap-2 flex-shrink-0 mr-4">
+          {/* 右侧：用户下拉菜单 */}
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             {currentUser ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="flex items-center gap-2">
-                    <User className="h-4 w-4" />
-                    <span>{currentUser.username}</span>
-                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${getAccessModeConfig(currentUser.access_mode).className}`}>
+                  <Button variant="outline" className="flex items-center gap-1 sm:gap-2 h-8 sm:h-9 px-2 sm:px-3">
+                    <User className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                    <span className="text-xs sm:text-sm max-w-[50px] sm:max-w-[80px] md:max-w-none truncate">
+                      {currentUser.username}
+                    </span>
+                    <span className={`px-1 sm:px-2 py-0.5 text-[10px] sm:text-xs font-medium rounded-full border ${getAccessModeConfig(currentUser.access_mode).className}`}>
                       {getAccessModeConfig(currentUser.access_mode).label}
                     </span>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuContent align="end" className="w-40 sm:w-48">
                   <DropdownMenuItem>
                     <CreditCard className="h-4 w-4 mr-2" />
                     订阅
@@ -2027,9 +2036,9 @@ export default function GroupDetailPage() {
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
-              <Button variant="outline" onClick={() => setAuthOpen(true)} className="flex items-center gap-2">
-                <User className="h-4 w-4" />
-                登录
+              <Button variant="outline" onClick={() => setAuthOpen(true)} className="flex items-center gap-1 sm:gap-2 h-8 sm:h-9 px-2 sm:px-3">
+                <User className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <span className="text-xs sm:text-sm">登录</span>
               </Button>
             )}
           </div>
@@ -2041,11 +2050,11 @@ export default function GroupDetailPage() {
       <div className="flex-1 flex gap-4 px-8 pb-4 min-h-0">
         
         {/* 左侧：社群信息 - 固定宽度，使用sticky定位 */}
-        <div className="w-80 flex-shrink-0 sticky top-0 h-fit max-h-screen">
+      <div className="hidden lg:block w-80 flex-shrink-0 sticky top-0 h-fit max-h-screen">
           <Card className="border border-gray-200 shadow-none h-full">
             <ScrollArea className="h-full">
-              <CardContent className="p-4 flex flex-col">
-                <div className="flex items-center gap-3 mb-4">
+              <CardContent className="pt-1 pb-1 px-2 flex flex-col">
+                <div className="flex items-center gap-3 mb-3">
                   <SafeImage
                     src={group.background_url}
                     alt={group.name}
@@ -2095,40 +2104,112 @@ export default function GroupDetailPage() {
           </Card>
 
           {/* 定价卡片 */}
-          {groupProduct && (
-            <Card className="border border-gray-200 shadow-none mt-4">
-              <CardContent className="p-4">
-                <h3 className="text-sm font-semibold text-gray-900 mb-3">订阅定价</h3>
-                <div className="space-y-2">
-                  {groupProduct.price_yearly && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">年付</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-base font-bold text-green-600">¥{groupProduct.price_yearly}</span>
-                        {groupProduct.original_price && (
-                          <span className="text-xs text-gray-400 line-through">¥{groupProduct.original_price}</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  {groupProduct.price_quarterly && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">季付</span>
-                      <span className="text-base font-bold text-green-600">¥{groupProduct.price_quarterly}</span>
-                    </div>
-                  )}
-                  {groupProduct.price_monthly && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">月付</span>
-                      <span className="text-base font-bold text-green-600">¥{groupProduct.price_monthly}</span>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-      
+          <Card className="border border-gray-200 shadow-none mt-4">
+            <CardContent className="pt-1 pb-1 px-2">
+              <h3 className="text-base font-semibold text-gray-900 mb-3">订阅方案</h3>
 
+              {/* 1. VIP用户 */}
+              <div className="mb-4 pb-4 border-b border-gray-200">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-semibold text-gray-900">VIP会员</span>
+                  <Badge className="bg-amber-100 text-amber-700 text-xs">全站通用</Badge>
+                </div>
+                <p className="text-xs text-gray-600 mb-2">可访问所有群组的全部内容</p>
+                <div className="flex items-center justify-center gap-3 text-sm">
+                  <span className="text-amber-600 font-bold">¥88<span className="text-gray-500 font-normal">/年</span></span>
+                  <span className="text-gray-300">|</span>
+                  <span className="text-amber-600 font-bold">¥25<span className="text-gray-500 font-normal">/季</span></span>
+                  <span className="text-gray-300">|</span>
+                  <span className="text-amber-600 font-bold">¥10<span className="text-gray-500 font-normal">/月</span></span>
+                </div>
+              </div>
+
+              {/* 2. 单一付费用户 */}
+              {groupProduct && (
+                <div className="mb-4 pb-4 border-b border-gray-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-semibold text-gray-900">付费订阅</span>
+                    <Badge className="bg-blue-100 text-blue-700 text-xs">单一群组</Badge>
+                  </div>
+                  <p className="text-xs text-gray-600 mb-2">可访问本群组所有内容</p>
+                  <div className="flex items-center justify-center gap-3 text-sm flex-wrap">
+                    {groupProduct.price_yearly && (
+                      <>
+                        <span className="text-green-600 font-bold">¥{groupProduct.price_yearly}<span className="text-gray-500 font-normal">/年</span></span>
+                        {(groupProduct.price_quarterly || groupProduct.price_monthly) && (
+                          <span className="text-gray-300">|</span>
+                        )}
+                      </>
+                    )}
+                    {groupProduct.price_quarterly && (
+                      <>
+                        <span className="text-green-600 font-bold">¥{groupProduct.price_quarterly}<span className="text-gray-500 font-normal">/季</span></span>
+                        {groupProduct.price_monthly && (
+                          <span className="text-gray-300">|</span>
+                        )}
+                      </>
+                    )}
+                    {groupProduct.price_monthly && (
+                      <span className="text-green-600 font-bold">¥{groupProduct.price_monthly}<span className="text-gray-500 font-normal">/月</span></span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 3. 免费用户 */}
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-semibold text-gray-900">免费用户</span>
+                  <Badge className="bg-gray-100 text-gray-700 text-xs">免费体验</Badge>
+                </div>
+                <p className="text-xs text-gray-600 mb-2">免费访问7-30天的内容</p>
+              </div>
+
+              {/* 付款二维码 */}
+              <div className="pt-2 border-t border-gray-200">
+                <p className="text-xs text-gray-600 mb-2 text-center">扫码付款</p>
+                <div className="flex justify-center">
+                  <img
+                    src="/images/payment-qr.png"
+                    alt="付款二维码"
+                    className="w-43 h-24 object-contain border border-gray-200 rounded"
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+
+          {/* 联系方式卡片 */}
+          <Card className="border border-gray-200 shadow-none mt-4">
+            <CardContent className="pt-1 pb-1 px-2">
+              <h3 className="text-base font-semibold text-gray-900 mb-4">联系我们（付款后请添加）</h3>
+              
+              {/* 微信二维码（2个） */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs text-gray-600 mb-2 text-center">企业微信</p>
+                  <div className="flex justify-center">
+                    <img 
+                      src="/images/wecom-qr.png" 
+                      alt="企业微信" 
+                      className="w-28 h-28 object-contain border border-gray-200 rounded"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-600 mb-2 text-center">个人微信</p>
+                  <div className="flex justify-center">
+                    <img 
+                      src="/images/wechat-qr.png" 
+                      alt="个人微信" 
+                      className="w-28 h-28 object-contain border border-gray-200 rounded"
+                    />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card> 
         </div>
 
         {/* 中间：话题和日志 - 可滚动区域 */}

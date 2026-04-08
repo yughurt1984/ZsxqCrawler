@@ -439,42 +439,49 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
       <div className="min-h-screen bg-background">
         <div className="container mx-auto p-4">
           <div className="mb-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-2xl font-bold mb-1">🌟 六便士拾荒的知识库</h1>
-                <p className="text-sm text-muted-foreground">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex-shrink-0">
+                <h1 className="text-lg sm:text-xl md:text-2xl font-bold mb-0.5 sm:mb-1 whitespace-nowrap">
+                  🌟 六便士拾荒的知识库
+                </h1>
+                <p className="text-xs sm:text-sm text-muted-foreground whitespace-nowrap">
                   选择要操作的群组
                 </p>
               </div>
-                <div className="flex items-center gap-2">
+
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
                 {currentUser ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="outline" className="flex items-center gap-2">
-                        <User className="h-4 w-4" />
-                        <span>{currentUser.username}</span>
-                        <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${getAccessModeConfig(currentUser.access_mode).className}`}>
+                      <Button
+                        variant="outline"
+                        className="flex items-center gap-1 sm:gap-2 h-8 sm:h-9 px-2 sm:px-3"
+                      >
+                        <User className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        <span className="text-xs sm:text-sm max-w-[60px] sm:max-w-none truncate">
+                          {currentUser.username}
+                        </span>
+                        <span className={`px-1 sm:px-2 py-0.5 text-[10px] sm:text-xs font-medium rounded-full border ${getAccessModeConfig(currentUser.access_mode).className}`}>
                           {getAccessModeConfig(currentUser.access_mode).label}
                         </span>
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-48">
-                        {/* 管理后台入口 - 仅管理员可见 */}
-                        {currentUser?.access_mode === 'admin' && (
-                          <DropdownMenuItem onClick={() => router.push('/admin')}>
-                            <Settings className="h-4 w-4 mr-2" />
-                            管理后台
-                          </DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem>
-                          <CreditCard className="h-4 w-4 mr-2" />
-                          订阅
+                      {/* 管理后台入口 - 仅管理员可见 */}
+                      {currentUser?.access_mode === 'admin' && (
+                        <DropdownMenuItem onClick={() => router.push('/admin')}>
+                          <Settings className="h-4 w-4 mr-2" />
+                          管理后台
                         </DropdownMenuItem>
-                        <DropdownMenuItem>
-                          <FileText className="h-4 w-4 mr-2" />
-                          订单
-                        </DropdownMenuItem>
-
+                      )}
+                      <DropdownMenuItem>
+                        <CreditCard className="h-4 w-4 mr-2" />
+                        订阅
+                      </DropdownMenuItem>
+                      <DropdownMenuItem>
+                        <FileText className="h-4 w-4 mr-2" />
+                        订单
+                      </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onClick={handleLogout} className="text-red-600">
                         <LogOut className="h-4 w-4 mr-2" />
@@ -483,15 +490,19 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 ) : (
-                  <Button variant="outline" onClick={() => setAuthOpen(true)} className="flex items-center gap-2">
-                    <UserPlus className="h-4 w-4" />
-                    注册 / 登录
+                  <Button
+                    variant="outline"
+                    onClick={() => setAuthOpen(true)}
+                    className="flex items-center gap-1 sm:gap-2 h-8 sm:h-9 px-2 sm:px-3"
+                  >
+                    <UserPlus className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                    <span className="text-xs sm:text-sm">注册 / 登录</span>
                   </Button>
                 )}
               </div>
-
             </div>
           </div>
+
 
           {/* 群组统计 */}
           <div className="mb-4 space-y-0.5">
@@ -520,11 +531,11 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                 return (
                   <div
                     key={group.group_id}
-                    className="group-card cursor-pointer bg-white border border-gray-200 rounded-lg hover:border-gray-300 transition-all duration-200 hover:shadow-md overflow-hidden w-[200px]"
+                    className="group-card cursor-pointer w-full sm:w-[200px]"
                     onClick={() => onGroupSelected(group)}
                   >
                     {/* 群组封面 */}
-                    <div className="w-[200px] h-[200px]">
+                    <div className="w-full aspect-square sm:w-[200px] sm:h-[200px]">
                       <SafeImage
                         src={(() => {
                           if (product?.cover_image) {
@@ -549,7 +560,7 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                     {/* 内容区域 */}
                     <div className="p-2.5">
                       <h3 className="text-sm font-semibold text-gray-900 line-clamp-1 mb-1.5">
-                        {group.name}
+                        {product?.name || group.name}
                       </h3>
                       
                       {/* 第一行：群主信息 + 订阅类型标签 */}

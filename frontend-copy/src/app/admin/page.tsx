@@ -27,6 +27,9 @@ interface User {
   phone: string;
   access_mode: string;
   created_at: string;
+  login_count?: number;      // 新增
+  last_login_at?: string;    // 新增
+  last_login_ip?: string;    // 新增
 }
 
 interface GroupProduct {
@@ -644,21 +647,23 @@ export default function AdminPage() {
                       <TableHead>邮箱</TableHead>
                       <TableHead>手机号</TableHead>
                       <TableHead>权限</TableHead>
+                      <TableHead>登录次数</TableHead>
+                      <TableHead>最后登录</TableHead>
                       <TableHead>注册时间</TableHead>
                       <TableHead>操作</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {usersLoading ? (
-                      <TableRow><TableCell colSpan={7} className="text-center">加载中...</TableCell></TableRow>
-                    ) : users.filter(u => 
-                      u.username.includes(userSearch) || 
+                      <TableRow><TableCell colSpan={9} className="text-center">加载中...</TableCell></TableRow>
+                    ) : users.filter(u =>
+                      u.username.includes(userSearch) ||
                       u.email.includes(userSearch)
                     ).length === 0 ? (
-                      <TableRow><TableCell colSpan={7} className="text-center text-gray-500">暂无用户</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={9} className="text-center text-gray-500">暂无用户</TableCell></TableRow>
                     ) : (
-                      users.filter(u => 
-                        u.username.includes(userSearch) || 
+                      users.filter(u =>
+                        u.username.includes(userSearch) ||
                         u.email.includes(userSearch)
                       ).map((user) => (
                         <TableRow key={user.id}>
@@ -667,9 +672,20 @@ export default function AdminPage() {
                           <TableCell>{user.email}</TableCell>
                           <TableCell>{user.phone}</TableCell>
                           <TableCell>{getAccessModeBadge(user.access_mode)}</TableCell>
+                          <TableCell>
+                            <span className="text-sm font-medium">{user.login_count || 0}</span>
+                          </TableCell>
+                          <TableCell>
+                            <div className="text-xs">
+                              <div>{user.last_login_at ? new Date(user.last_login_at).toLocaleDateString() : '-'}</div>
+                              {user.last_login_ip && (
+                                <div className="text-gray-500">{user.last_login_ip}</div>
+                              )}
+                            </div>
+                          </TableCell>
                           <TableCell>{new Date(user.created_at).toLocaleDateString()}</TableCell>
                           <TableCell>
-                            <select 
+                            <select
                               className="text-sm border rounded px-2 py-1"
                               value={user.access_mode}
                               onChange={(e) => updateUserAccessMode(user.id, e.target.value)}
@@ -685,6 +701,7 @@ export default function AdminPage() {
                     )}
                   </TableBody>
                 </Table>
+
               </CardContent>
             </Card>
           </TabsContent>

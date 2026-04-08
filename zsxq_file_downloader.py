@@ -1214,21 +1214,22 @@ class ZSXQFileDownloader:
                     self.file_db.conn.commit()
                 elif result:
                     stats['downloaded'] += 1
-                    # 更新数据库状态为已完成
-                    safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}')
+                    # 更新数据库状态为已完成（修改为绝对路径）
+                    afe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}')
                     if not safe_filename:
                         safe_filename = f"file_{file_id}"
-                    file_path = os.path.join(self.download_dir, safe_filename)
-                    
+
+                    # 保存相对路径
+                    relative_path = f"downloads/{safe_filename}"
+
                     self.file_db.cursor.execute('''
                         UPDATE files 
                         SET download_status = 'completed',
                             local_path = ?,
                             download_time = CURRENT_TIMESTAMP
                         WHERE file_id = ?
-                    ''', (file_path, file_id))
+                    ''', (relative_path, file_id))
                     self.file_db.conn.commit()
-                    self.log(f"   ✅ 数据库状态已更新为: completed")
 
                     # 检查长休眠
                     self.check_long_delay()

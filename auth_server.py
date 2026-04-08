@@ -19,7 +19,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse, Response
+from fastapi.responses import JSONResponse, StreamingResponse, Response, FileResponse
 from pydantic import BaseModel, Field, field_validator
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -35,7 +35,11 @@ AUTH_PORT = int(os.environ.get("AUTH_PORT", "8209"))
 UPSTREAM_URL = os.environ.get("UPSTREAM_URL", "http://localhost:8208").rstrip("/")
 JWT_SECRET = os.environ.get("JWT_SECRET", "change-me-default-secret-key-2026")
 TOKEN_EXPIRE_DAYS = int(os.environ.get("TOKEN_EXPIRE_DAYS", "30"))
+# 本地访问
 DB_PATH = os.environ.get("AUTH_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth.db"))
+
+# 服务器部署，需将数据库文件放在 Web 根目录之外
+# DB_PATH = os.environ.get("AUTH_DB_PATH", "/var/lib/zsxq/auth.db")  # Linux
 
 ALGORITHM = "HS256"
 
@@ -82,6 +86,24 @@ def _ensure_schema():
             );
         """)
         conn.commit()
+         # 添加登录统计字段（迁移）
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN login_count INTEGER DEFAULT 0")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 字段已存在，忽略
+        
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 字段已存在，忽略
+        
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN last_login_ip TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 字段已存在，忽略
     finally:
         conn.close()
 
@@ -287,6 +309,9 @@ class UserInfo(BaseModel):
     access_mode: str
     created_at: str
     allowed_groups: dict  # 改为 dict，key 是 group_id，value 是到期日
+    login_count: Optional[int] = 0      # 新增：登录次数
+    last_login_at: Optional[str] = None # 新增：最后登录时间
+    last_login_ip: Optional[str] = None # 新增：最后登录IP
 
 # =========================
 # 群组商品相关模型
@@ -407,6 +432,115 @@ async def proxy_image_options(filename: str):
             "Access-Control-Allow-Headers": "*"
         }
     )
+
+# =========================
+# 本地文件直接下载 API（客户使用）
+# =========================
+
+@app.get("/api/files/check-local-simple/{group_id}")
+async def check_local_file_simple(group_id: str, file_name: str, file_size: int):
+    """检查本地文件是否存在"""
+    from pathlib import Path
+    
+    try:
+        download_dir = Path("output/databases") / group_id / "downloads"
+        
+        if not download_dir.exists():
+            return {"exists": False, "message": "目录不存在"}
+        
+        # 1.精确匹配
+        file_path = download_dir / file_name
+        if file_path.exists():
+            return {
+                "exists": True,
+                "matched_file": file_name,
+                "local_path": str(file_path.absolute()),
+                "size": file_path.stat().st_size
+            }
+        
+        # 2. 模糊匹配 - 去除特殊字符后匹配
+        clean_name = re.sub(r'[^\w\u4e00-\u9fff.\-_]', '', file_name)
+        
+        for f in download_dir.glob("*"):
+            if not f.is_file():
+                continue
+            
+            # 清理本地文件名
+            local_clean = re.sub(r'[^\w\u4e00-\u9fff.\-_]', '', f.name)
+            
+            # 比较清理后的文件名
+            if local_clean == clean_name:
+                return {
+                    "exists": True,
+                    "matched_file": f.name,
+                    "local_path": str(f.absolute()),
+                    "size": f.stat().st_size,
+                    "match_type": "fuzzy"
+                }
+
+        # 3. 按大小匹配（兜底）
+        for f in download_dir.glob("*.pdf"):
+            if f.stat().st_size == file_size:
+                return {
+                    "exists": True,
+                    "matched_file": f.name,
+                    "local_path": str(f.absolute()),
+                    "size": f.stat().st_size,
+                    "match_type": "size"
+                }
+        
+        return {"exists": False, "message": "未找到匹配文件"}
+        
+    except Exception as e:
+        return {"exists": False, "error": str(e)}
+
+
+@app.get("/api/files/download-local/{group_id}")
+async def download_local_file(group_id: str, file_name: str, file_size: int):
+    """下载本地文件"""
+    
+    try:
+        download_dir = Path("output/databases") / group_id / "downloads"
+        
+        if not download_dir.exists():
+            raise HTTPException(status_code=404, detail="目录不存在")
+        
+        # 1.精确匹配
+        file_path = download_dir / file_name
+        if file_path.exists():
+            return FileResponse(
+                path=str(file_path),
+                filename=file_name,
+                media_type='application/octet-stream'
+            )
+
+        # 2. 去除特殊字符后匹配
+        
+        # 移除特殊字符（保留字母、数字、中文、点号、下划线、连字符）
+        clean_name = re.sub(r'[^\w\u4e00-\u9fff.\-_]', '', file_name)
+        
+        # 遍历目录查找匹配的文件
+        for f in download_dir.glob("*"):
+            if not f.is_file():
+                continue
+            
+            # 清理本地文件名
+            local_clean = re.sub(r'[^\w\u4e00-\u9fff.\-_]', '', f.name)
+            
+            # 比较清理后的文件名
+            if local_clean == clean_name:
+                return FileResponse(
+                    path=str(f),
+                    filename=f.name,
+                    media_type='application/octet-stream'
+                )
+
+        raise HTTPException(status_code=404, detail="本地文件未找到")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"下载失败: {str(e)}")
 
 # =========================
 # 图片管理 API
@@ -691,7 +825,9 @@ async def admin_list_users(request: Request):
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, username, email, phone, access_mode, created_at FROM users ORDER BY created_at DESC"
+            """SELECT id, username, email, phone, access_mode, created_at, login_count, last_login_at, last_login_ip
+               FROM users 
+               ORDER BY created_at DESC"""
         ).fetchall()
         return {"users": [dict(r) for r in rows]}
     finally:
@@ -809,17 +945,32 @@ async def register(req: RegisterRequest):
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-async def login(req: LoginRequest):
+async def login(req: LoginRequest, request: Request):
     conn = _get_conn()
     try:
         row = conn.execute("SELECT * FROM users WHERE username = ?", (req.username,)).fetchone()
         if not row or not verify_password(req.password, row["password_hash"]):
             raise HTTPException(401, "用户名或密码错误")
 
+        # 创建 token
         token = create_token(row["id"], row["username"])
+        
+        # 更新登录统计
+        client_ip = request.client.host if request.client else "unknown"
+        conn.execute(
+            """UPDATE users 
+               SET login_count = COALESCE(login_count, 0) + 1, 
+                   last_login_at = datetime('now', 'localtime'),
+                   last_login_ip = ?
+               WHERE id = ?""",
+            (client_ip, row["id"])
+        )
+        conn.commit()
+        
         return TokenResponse(access_token=token, username=row["username"])
     finally:
         conn.close()
+
 
 # =========================
 # 授权管理 API
@@ -1051,7 +1202,8 @@ async def proxy(request: Request, path: str):
 
 
 def _apply_delayed_filter(path: str, resp: httpx.Response, access_mode: str) -> Optional[JSONResponse]:
-    """内容过滤：免费用户过滤7天内，隔日用户过滤当天"""
+    """内容过滤：免费用户只能查看7-30天内容"""
+
 
     topic_list_pattern = re.compile(r"^/api/groups/\d+/topics$")
     topic_detail_pattern = re.compile(r"^/api/topics/\d+/\d+$")
@@ -1065,53 +1217,57 @@ def _apply_delayed_filter(path: str, resp: httpx.Response, access_mode: str) -> 
 
     filtered = False
 
-    # 根据访问模式确定提示信息和过滤天数
+    # 根据访问模式确定提示信息和过滤范围
     if access_mode == "free":
-        filter_days = 7
+        min_days = 5   # 最少5天前
+        max_days = 30  # 最多30天前
         title_placeholder = "📢 该内容仅对付费用户开放"
-        text_placeholder = "免费用户仅可查看 7 天前的内容，升级会员可查看更多。"
+        text_placeholder_early = "免费用户仅可查看 7-30 天内的内容，当前内容发布不足 7 天，升级会员可查看更多。"
+        text_placeholder_late = "免费用户仅可查看 7-30 天内的内容，当前内容已超过 30 天，升级会员可查看更多。"
     else:  # delayed
-        filter_days = 1
+        min_days = 1
+        max_days = 999999  # 无上限
         title_placeholder = "📢 该内容将于明日查看"
-        text_placeholder = "该内容将在明天自动开放查看，请耐心等待。"
+        text_placeholder_early = "该内容将在明天自动开放查看，请耐心等待。"
+        text_placeholder_late = "该内容将在明天自动开放查看，请耐心等待。"
+
+    def should_filter(time_str: str) -> tuple[bool, str]:
+        """判断是否需要过滤，返回 (是否过滤, 提示文本)"""
+        if not time_str:
+            return False, ""
+        
+        # 检查是否在 min_days 内（太新）
+        if is_within_days(time_str, min_days):
+            return True, text_placeholder_early
+        
+        # 检查是否超过 max_days（太旧）
+        if max_days < 999999 and not is_within_days(time_str, max_days):
+            return True, text_placeholder_late
+        
+        return False, ""
 
     # 话题列表
     if topic_list_pattern.match(path) and isinstance(data, dict) and "topics" in data:
         for topic in data["topics"]:
-            if is_within_days(topic.get("create_time", ""), filter_days):
+            should, text = should_filter(topic.get("create_time", ""))
+            if should:
                 topic["title"] = title_placeholder
                 topic["_filtered"] = True
         filtered = True
 
     # 话题详情
     elif topic_detail_pattern.match(path) and isinstance(data, dict):
-        if is_within_days(data.get("create_time", ""), filter_days):
+        should, text = should_filter(data.get("create_time", ""))
+        if should:
             data["title"] = title_placeholder
-            data["text"] = text_placeholder
+            data["text"] = text
             data["_filtered"] = True
         filtered = True
 
-    # 专栏文章列表
-    elif column_topics_pattern.match(path) and isinstance(data, dict) and "topics" in data:
-        for topic in data["topics"]:
-            if is_within_days(topic.get("create_time", ""), filter_days) or \
-               is_within_days(topic.get("attached_to_column_time", ""), filter_days):
-                topic["title"] = title_placeholder
-                topic["_filtered"] = True
-        filtered = True
-
-    # 专栏文章详情
-    elif column_topic_detail_pattern.match(path) and isinstance(data, dict):
-        if is_within_days(data.get("create_time", ""), filter_days):
-            data["title"] = title_placeholder
-            data["full_text"] = text_placeholder
-            data["_filtered"] = True
-        filtered = True
 
     if filtered:
-        return JSONResponse(content=data, status_code=resp.status_code)
+        return JSONResponse(data)
     return None
-
 
 
 def _apply_group_filter(resp: httpx.Response, allowed_groups: list) -> Optional[JSONResponse]:
