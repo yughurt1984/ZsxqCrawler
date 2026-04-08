@@ -442,6 +442,12 @@ public async request<T>(
     return `${API_BASE_URL}/api/groups/${groupId}/videos/${encodeURIComponent(videoFilename)}`;
   }
 
+  // 获取本地缓存文件URL（用于下载的文件）
+  getLocalFileUrl(groupId: string, localPath: string): string {
+    if (!localPath) return '';
+    return `${API_BASE_URL}/api/groups/${groupId}/files/${encodeURIComponent(localPath)}`;
+  }
+
   // 图片缓存管理
   async getImageCacheInfo(groupId: string) {
     return this.request(`/api/cache/images/info/${groupId}`);

@@ -18,7 +18,9 @@ import hashlib
 from xhtml2pdf import pisa
 from io import BytesIO
 from bs4 import BeautifulSoup  # 新增：用于解析HTML
-
+import textwrap
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 import re
 from urllib.parse import urlparse
@@ -902,7 +904,24 @@ class ZSXQInteractiveCrawler:
         Returns:
             处理后的 HTML
         """
-        import textwrap
+        # ⭐ 注册中文字体（优先微软雅黑）
+        font_name = 'SimSun'  # 默认宋体
+        font_paths = [
+            ('MicrosoftYaHei', 'C:/Windows/Fonts/msyh.ttc'),      # 微软雅黑
+            ('MicrosoftYaHei', 'C:/Windows/Fonts/msyhbd.ttc'),    # 微软雅黑粗体
+            ('SimSun', 'C:/Windows/Fonts/simsun.ttc'),            # 宋体
+            ('SimHei', 'C:/Windows/Fonts/simhei.ttf'),            # 黑体
+        ]
+        
+        for name, font_path in font_paths:
+            if os.path.exists(font_path):
+                try:
+                    pdfmetrics.registerFont(TTFont(name, font_path))
+                    font_name = name
+                    self.log(f"   ✅ 已注册字体: {name} ({font_path})")
+                    break
+                except Exception as e:
+                    self.log(f"   ⚠️ 字体注册失败 {name}: {e}")
         
         # 调整图片样式
         def add_responsive_style(match):
@@ -928,6 +947,18 @@ class ZSXQInteractiveCrawler:
         html_content = re.sub(r'<!DOCTYPE[^>]*>\s*', '', html_content)
         html_content = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n' + html_content
         
+        # ⭐ 清理所有内联 font-family 样式（方案 B）
+        html_content = re.sub(
+            r'font-family\s*:\s*[^;\'"<>]+;?\s*',
+            '',
+            html_content,
+            flags=re.IGNORECASE
+        )
+        
+        # 清理 style 属性中可能残留的空样式
+        html_content = re.sub(r'style\s*=\s*["\']\s*["\']', '', html_content)
+    
+    
         # ⭐ 文本换行处理（与 webhook 保持一致）
         html_content = self._html_wrap_content(html_content, width=46)
         
@@ -940,7 +971,7 @@ class ZSXQInteractiveCrawler:
         # 注入 CSS
         css = '''
             <style>
-                @page { size: A4; margin: 2cm; }
+                @page { size: A4; margin: 1.8cm; }
                 body { 
                     font-family: STSong-Light, SimSun,Times New Roman, Arial, sans-serif; 
                     line-height: 1.6; 
