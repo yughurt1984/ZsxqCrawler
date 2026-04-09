@@ -122,8 +122,7 @@ class ZSXQFileDownloader:
         print(message)
         if self.log_callback:
             self.log_callback(message)
-        else:
-            print(message)
+        
 
     def format_file_size(self, size_bytes: int) -> str:
         """格式化文件大小为人类可读格式
