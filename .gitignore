@@ -50,3 +50,7 @@ cache
 
 # local config
 config.toml
+
+# ===== 前端 (Node.js) =====
+node_modules/
+.next/
