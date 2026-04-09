@@ -1,0 +1,22 @@
+{
+  "name": "zsxq-multi-app",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "admin-use",
+    "client-use"
+  ],
+  "scripts": {
+    "dev:admin": "npm run dev --workspace=admin-use",
+    "dev:client": "npm run dev --workspace=client-use",
+    "build:admin": "npm run build --workspace=admin-use",
+    "build:client": "npm run build --workspace=client-use",
+    "start:admin": "npm run start --workspace=admin-use",
+    "start:client": "npm run start --workspace=client-use",
+    "dev": "concurrently \"npm run dev:admin\" \"npm run dev:client\"",
+    "build": "npm run build:admin && npm run build:client"
+  },
+  "devDependencies": {
+    "concurrently": "^8.0.0"
+  }
+}
