@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
+import { API_BASE_URL } from '@/lib/api';
 
 interface ConfigPanelProps {
   onConfigSaved: () => void;
@@ -113,7 +114,7 @@ export default function ConfigPanel({ onConfigSaved }: ConfigPanelProps) {
             <CardContent>
               <Button
                 variant="outline"
-                onClick={() => window.open('http://localhost:8208/docs', '_blank')}
+                onClick={() => window.open(`${API_BASE_URL}/docs`, '_blank')}
                 className="w-full"
               >
                 📖 查看API文档

@@ -243,14 +243,54 @@ class ZSXQInteractiveCrawler:
             else:
                 print(f"   ⚠️ 时间戳数据不完整")
     
-    def get_stealth_headers(self) -> Dict[str, str]:
+    def generate_zsxq_signature(self, path: str, params: dict) -> tuple:
+        """
+        生成知识星球API签名
+        
+        签名规则：
+        1. 添加公共参数：app_version, platform, timestamp
+        2. 所有参数按键名升序排列
+        3. 拼接为 path&key1=value1&key2=value2...
+        4. 加上密钥 zsxqapi2020 后 MD5 加密
+        """
+        # 毫秒级时间戳
+        timestamp = int(time.time() * 1000)
+        
+        # 合并公共参数和业务参数
+        all_params = {
+            "app_version": "2.89.0",
+            "platform": "web",
+            "timestamp": str(timestamp),
+        }
+        all_params.update(params)
+        
+        # 按键名升序排列
+        sorted_params = sorted(all_params.items())
+        param_str = "&".join([f"{k}={v}" for k, v in sorted_params])
+        
+        # 拼接签名串
+        sign_str = f"{path}&{param_str}"
+        
+        # 加密钥后MD5加密
+        secret = "zsxqapi2020"
+        sign_str_with_secret = sign_str + secret
+        signature = hashlib.md5(sign_str_with_secret.encode()).hexdigest()
+        
+        return signature, timestamp
+
+
+    def get_stealth_headers(self, path: str, params: dict = None) -> Dict[str, str]:
         """获取隐蔽性更强的请求头"""
+        if params is None:
+            params = {}
+        
+        # 生成签名
+        signature, timestamp = self.generate_zsxq_signature(path, params)
+
         # 更多样化的User-Agent池
         user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",  # 新增
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         ]
@@ -266,18 +306,17 @@ class ZSXQInteractiveCrawler:
             "Pragma": "no-cache",
             "Priority": "u=1, i",
             "Referer": "https://wx.zsxq.com/",
-            "Sec-Ch-Ua": '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
+            "Sec-Ch-Ua": '"Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
             "Sec-Ch-Ua-Mobile": "?0",
             "Sec-Ch-Ua-Platform": '"Windows"',
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
             "User-Agent": random.choice(user_agents),
-            "X-Aduid": "a3be07cd6-dd67-3912-0093-862d844e7fe",
-            "X-Request-Id": f"dcc5cb6ab-1bc3-8273-cc26-{random.randint(100000000000, 999999999999)}",
-            "X-Signature": "733fd672ddf6d4e367730d9622cdd1e28a4b6203",
-            "X-Timestamp": str(int(time.time())),
-            "X-Version": "2.77.0"
+            "X-Request-Id": f"{random.randint(100000000, 999999999)}-{random.randint(1000, 9999)}-{random.randint(1000, 9999)}-{random.randint(1000, 9999)}-{random.randint(100000000000, 999999999999)}",
+            "X-Signature": signature,  # 动态生成的签名
+            "X-Timestamp": str(timestamp),  # 毫秒级时间戳
+            "X-Version": "2.89.0"
         }
         
         # 随机添加可选头部
@@ -376,7 +415,8 @@ class ZSXQInteractiveCrawler:
                     params['begin_time'] = begin_time
 
                 # 使用与主要API相同的隐蔽性请求头，包含完整的认证信息
-                headers = self.get_stealth_headers()
+                api_path = f"/v2/topics/{topic_id}/comments"
+                headers = self.get_stealth_headers(api_path, params)
 
                 # 调试模式输出详细信息
                 if self.debug_mode and retry == 0:  # 只在第一次尝试时输出
@@ -552,9 +592,6 @@ class ZSXQInteractiveCrawler:
         # 智能延迟
         self.smart_delay(is_historical)
         
-        url = f"{self.base_url}{self.api_endpoint}"
-        headers = self.get_stealth_headers()
-        
         # 构建参数
         params = {
             "scope": scope,
@@ -563,6 +600,9 @@ class ZSXQInteractiveCrawler:
         
         if end_time:
             params["end_time"] = end_time
+
+        url = f"{self.base_url}{self.api_endpoint}"
+        headers = self.get_stealth_headers(self.api_endpoint, params)  # 传入path和参数    
         
         # 不添加额外参数，保持与官网请求一致
         # random_params = {

@@ -5,7 +5,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable @typescript-eslint/no-empty-object-type */
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || 'http://localhost:8209').replace(/\/$/, '');
+export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || 'http://localhost:8209').replace(/\/$/, '');
 
 // 类型定义
 export interface ApiResponse<T = any> {

@@ -18,6 +18,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import SafeImage from './SafeImage';
 import AuthDialog from './AuthDialog';
 import '../styles/group-selector.css';
+import { API_BASE_URL } from '@/lib/api';
+
 
 // access_mode 配置（中文 + 样式）
 const getAccessModeConfig = (mode: string) => {
@@ -140,9 +142,9 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
       }
 
       // 1. 先加载商品数据
-      let productsMap: Record<number, any> = {};
+      const productsMap: Record<number, any> = {};
       try {
-        const response = await fetch('http://localhost:8209/api/groups/products');
+        const response = await fetch(`${API_BASE_URL}/api/groups/products`);
         const data = await response.json();
         data.products.forEach((p: any) => {
           productsMap[p.group_id] = p;
@@ -544,7 +546,7 @@ export default function GroupSelector({ onGroupSelected }: GroupSelectorProps) {
                             } else {
                               // 使用代理 API 解决 CORS 问题
                               const filename = product.cover_image.replace('/static/images/', '');
-                              return `http://localhost:8209/api/image/${filename}`;
+                              return `${API_BASE_URL}/api/image/${filename}`;
                             }
                           }
                           return group.background_url;

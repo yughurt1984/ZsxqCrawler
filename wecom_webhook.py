@@ -23,6 +23,7 @@ import random
 import time
 from datetime import datetime
 import platform
+import shutil
 
 class HTMLTagRemover(HTMLParser):
     """HTML标签清理器"""
@@ -407,7 +408,12 @@ class WeComWebhook:
                 
                 # 提取附件列表
                 topic_files = talk.get('files', [])
-                
+                '''
+                分支1: 有zsxq链接 → _handle_article_pdf() → convert_url_to_pdf()
+                分支2: 有附件 → _handle_attachments()
+                分支3: 有图片 → convert_text_and_images_to_pdf() → _create_text_page()
+                分支4: 纯文本 → convert_text_to_pdf() → _create_text_page()
+                '''
                 # ========== 2. 分支1: 有zsxq链接 → 只推送链接内容 ==========
                 if article_url and 'zsxq' in article_url and crawler:
                     topic_id = topic.get('topic_id')
@@ -434,16 +440,17 @@ class WeComWebhook:
                                 image_paths.append(img_path)
                         
                         if image_paths:
-                            # 创建图片PDF
-                            images_pdf = self._create_images_pages(image_paths, pdf_output_dir)
-                            if images_pdf:
-                                # 添加水印模板
-                                final_pdf = os.path.join(pdf_output_dir, f"images_{i}_{datetime.now().strftime('%H%M%S')}.pdf")
-                                if self._merge_with_template(images_pdf, final_pdf):
-                                    if self.send_file(final_pdf):
-                                        self.log(f"   ✅ 图片PDF推送成功")
-                                    else:
-                                        self.log(f"   ⚠️ 图片PDF推送失败")
+                            # 创建图片PDF（已使用背景图片含水印）
+                            images_pages = self._create_images_pages(image_paths)
+                            if images_pages:
+                                # 直接保存并发送
+                                timestamp = int(time.time() * 1000)
+                                images_pdf = os.path.join(pdf_output_dir, f"images_{i}_{timestamp}.pdf")
+                                images_pages[0].save(images_pdf, 'PDF', save_all=True, append_images=images_pages[1:], dpi=(300, 300))
+                                if self.send_file(images_pdf):
+                                    self.log(f"   ✅ 图片PDF推送成功")
+                                else:
+                                    self.log(f"   ⚠️ 图片PDF推送失败")
                     
                     if attachment_success:
                         success_count += 1
@@ -1193,10 +1200,14 @@ class WeComWebhook:
             content = clean_html_tags(content)
             
             # ============ 第一页：文本内容 ============
-            text_page = self._create_text_page(title, content, author_name, create_time, index, total)
+            background_image_path = os.path.join(os.path.dirname(__file__), "images", "pdf_background.png")
             
             # ============ 第二页：图片 ============
-            pdf_pages = []
+            text_page = self._create_text_page(
+                title, content, author_name, create_time, index, total,
+                background_image_path=background_image_path
+            )
+            pdf_pages = []  # 👈 添加这一行
 
             # 临时文件目录（单独存放）
             temp_dir = os.path.join(os.path.dirname(__file__), "temp_pdf_pages")
@@ -1210,7 +1221,8 @@ class WeComWebhook:
             
             # 处理图片页
             if image_paths:
-                images_pages = self._create_images_pages(image_paths)
+                images_pages = self._create_images_pages(image_paths, background_image_path=background_image_path)
+
                 for i, page in enumerate(images_pages):
                     temp_images_path = os.path.join(output_dir, f"_temp_images_{timestamp}_{i}.png")
                     page.save(temp_images_path,quality=95, optimize=False)
@@ -1248,19 +1260,9 @@ class WeComWebhook:
                 except:
                     pass
             
-             # 与模板合并
-            if self._merge_with_template(temp_pdf_path, pdf_path):
-                self.log(f"   ✅ PDF生成成功（已合并模板）: {pdf_path} (共{len(pdf_pages)}页)")
-                # 清理临时PDF
-                try:
-                    os.remove(temp_pdf_path)
-                except:
-                    pass
-            else:
-                # 模板合并失败，直接移动临时PDF
-                import shutil
-                shutil.move(temp_pdf_path, pdf_path)
-                self.log(f"   ✅ PDF生成成功（无模板）: {pdf_path} (共{len(pdf_pages)}页)")
+            # 直接保存为最终PDF（已使用背景图片含水印，无需叠加模板）
+            shutil.move(temp_pdf_path, pdf_path)
+            self.log(f"   ✅ PDF生成成功: {pdf_path} (共{len(pdf_pages)}页)")
             
             return pdf_path
             
@@ -1271,9 +1273,10 @@ class WeComWebhook:
             return None
     
     def _create_text_page(self, title: str, content: str, author_name: str, 
-                          create_time: str, index: int, total: int) -> Image.Image:
+                      create_time: str, index: int, total: int,
+                      background_image_path: str = None) -> Image.Image:
         """
-        创建文本页面（A4尺寸，底部预留120px）
+        创建文本页面（A4尺寸，使用背景图片）
         
         Returns:
             PIL Image对象
@@ -1281,9 +1284,25 @@ class WeComWebhook:
         # A4尺寸 (像素)
         img_width = 794
         img_height = 1123
-        footer_reserved = 120  # 底部预留高度
+        footer_reserved = 140  # 底部预留高度
         editable_height = img_height - footer_reserved  # 可编辑区域高度
         
+        # ============ 核心修改：加载背景图片 ============
+        if background_image_path and os.path.exists(background_image_path):
+            # 加载背景图片（已含水印和二维码）
+            image = Image.open(background_image_path)
+            # 调整到A4尺寸
+            image = image.resize((img_width, img_height), Image.Resampling.LANCZOS)
+            # 确保是RGB模式
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+        else:
+            # 兜底：白色背景
+            background_color = (255, 255, 255)
+            image = Image.new('RGB', (img_width, img_height), background_color)
+        
+        draw = ImageDraw.Draw(image)
+
         background_color = (255, 255, 255)
         temp_image = Image.new('RGB', (img_width, 100), background_color)
         temp_draw = ImageDraw.Draw(temp_image)
@@ -1349,9 +1368,6 @@ class WeComWebhook:
             else:
                 content_lines.append("")
         
-        # 创建A4尺寸图片
-        image = Image.new('RGB', (img_width, img_height), background_color)
-        draw = ImageDraw.Draw(image)
         
         # 颜色定义
         title_color = (0, 0, 0)
@@ -1359,6 +1375,13 @@ class WeComWebhook:
         info_color = (100, 100, 100)
         border_color = (200, 200, 200)
         
+        # 创建干扰文字的小字体
+        try:
+            font_noise = ImageFont.truetype("C:\\Windows\\Fonts\\msyh.ttc", 18)
+        except:
+            font_noise = ImageFont.load_default()
+        noise_color = (50, 100, 200)  # 蓝色
+
         y = 40
         
         # 绘制顶部横线
@@ -1394,6 +1417,7 @@ class WeComWebhook:
         y += 30
         
         # 绘制内容（确保不超出可编辑区域）
+        line_count = 0  # 行计数器
         for line in content_lines:
             if y + 28 > editable_height:  # 超出可编辑区域，停止绘制
                 break
@@ -1414,11 +1438,20 @@ class WeComWebhook:
                     line = truncated_line
                 draw.text((40, y), line, fill=text_color, font=font_text)
                 y += 28
+                line_count += 1
+                
+                # 第6行插入干扰文字
+                if line_count == 6:
+                    y += 15
+                    noise_text = "请务必添加原作者微信：MK0914666，私自转发很快会被技术手段清除！"
+                    draw.text((40, y), noise_text, fill=noise_color, font=font_noise)
+                    y += 35
+
         
         # 不绘制底部信息（由模板提供）
         return image
     
-    def _create_images_pages(self, image_paths: List[str]) -> List[Image.Image]:
+    def _create_images_pages(self, image_paths: List[str], background_image_path: str = None) -> List[Image.Image]:
         """
         创建图片页面列表（A4尺寸，每行1张图片，保持原始比例，支持多页）
         
@@ -1471,8 +1504,15 @@ class WeComWebhook:
                 
                 img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
                 
-                # 创建A4尺寸页面（白色背景，与模板合并后显示模板背景）
-                page = Image.new('RGB', (page_width, page_height), (255, 255, 255))
+                # 创建A4尺寸页面（使用背景图片）
+                if background_image_path and os.path.exists(background_image_path):
+                    page = Image.open(background_image_path)
+                    page = page.resize((page_width, page_height), Image.Resampling.LANCZOS)
+                    if page.mode != 'RGB':
+                        page = page.convert('RGB')
+                else:
+                    # 兜底：白色背景
+                    page = Image.new('RGB', (page_width, page_height), (255, 255, 255))
                 draw = ImageDraw.Draw(page)
                 
                 # 绘制标题
@@ -1638,366 +1678,3 @@ class WeComWebhook:
             self.log(f"   ❌ 图片发送异常: {e}")
             return False
     
-    def _text_to_image(self, title: str, content: str, author_name: str, 
-                   create_time: str, index: int, total: int,
-                   question_images: Optional[List[str]] = None,
-                   crawler = None) -> Optional[str]:
-        """
-        将文本内容转换为图片，支持嵌入图片
-        
-        Args:
-            title: 标题
-            content: 内容
-            author_name: 作者名
-            create_time: 创建时间
-            index: 当前索引
-            total: 总数
-            images: 图片URL列表（可选）
-            crawler: 爬虫实例，用于下载图片（可选）
-                
-        Returns:
-            图片文件路径，失败返回None
-        """
-        try:
-            # 创建图片（白色背景）
-            img_width = 800
-            img_height = 1000
-            background_color = (255, 255, 255)  # 白色
-            image = Image.new('RGB', (img_width, img_height), background_color)
-            draw = ImageDraw.Draw(image)
-            
-            # 尝试加载字体，优先使用中文字体
-            font_paths = [
-            "C:\\Windows\\Fonts\\simhei.ttf",  # 黑体：更清晰锐利
-            "C:\\Windows\\Fonts\\msyh.ttc",
-            "C:\\Windows\\Fonts\\simsun.ttc",
-                None  # 使用默认字体
-            ]
-            
-            font_title = None
-            font_text = None
-            font_info = None
-            
-            # 字体大小变量（可根据内容长度动态调整）
-            base_font_size_title = 32
-            base_font_size_text = 22
-            base_font_size_info = 16
-            
-            for font_path in font_paths:
-                try:
-                    if font_path:
-                        font_title = ImageFont.truetype(font_path, base_font_size_title)
-                        font_text = ImageFont.truetype(font_path, base_font_size_text)
-                        font_info = ImageFont.truetype(font_path, base_font_size_info)
-                        break
-                except:
-                    continue
-
-            # 如果所有字体都加载失败，使用默认字体
-            if font_title is None:
-                font_title = ImageFont.load_default()
-                font_text = ImageFont.load_default()
-                font_info = ImageFont.load_default()
-            
-            # 颜色定义
-            title_color = (0, 0, 0)  # 黑色
-            text_color = (70, 70, 70)  # 深灰色
-            info_color = (100, 100, 100)  # 灰色
-            border_color = (200, 200, 200)  # 浅灰色
-            
-            # 当前Y坐标
-            y = 30
-            
-            # 绘制顶部横线
-            draw.rectangle([20, y, img_width - 20, y + 3], fill=border_color)
-            y += 40  # ✅ 修改：增加间距，直接从作者信息开始
-            
-            title_text = "新内容推送"
-            bbox = draw.textbbox((0, 0), title_text, font=font_title)
-            title_width = bbox[2] - bbox[0]
-
-            
-            draw.text(((img_width - title_width) // 2, y), title_text, 
-                    fill=title_color, font=font_title)
-            y += 50
-            
-            draw.line([40, y, img_width - 40, y], fill=border_color, width=2)
-            y += 25
-            
-            # 绘制作者和时间
-            draw.text((40, y), f" 作者: {author_name}", 
-                    fill=info_color, font=font_info)
-            
-            y += 25
-            draw.text((40, y), f" 时间: {create_time}", 
-                    fill=info_color, font=font_info)
-            y += 30
-
-            
-            # 在时间和内容之间添加分割线
-            draw.line([40, y, img_width - 40, y], fill=border_color, width=1)
-            y += 20
-            
-            # 绘制内容标签
-            draw.text((40, y), "【内容】:", fill=text_color, font=font_text)
-            y += 25
-            
-            # 处理内容文本（自动换行）
-            max_content_width = img_width - 80
-            content_lines = []
-            
-            # 按换行符分割段落
-            paragraphs = content.split('\n')
-            for para in paragraphs:
-                if para.strip():
-                    # 逐字添加，计算实际宽度
-                    current_line = ""
-                    for char in para:
-                        test_line = current_line + char
-                        bbox = draw.textbbox((0, 0), test_line, font=font_text)
-                        line_width = bbox[2] - bbox[0]
-                        
-                        if line_width <= max_content_width:
-                            current_line = test_line
-                        else:
-                            # 当前行宽度超出，换到下一行
-                            if current_line:
-                                content_lines.append(current_line)
-                            current_line = char
-                    
-                    # 添加最后一行
-                    if current_line:
-                        content_lines.append(current_line)
-                else:
-                    content_lines.append("")  # 保留空行
-
-                        
-            # 如果内容过长，自动缩小字体以容纳全部内容
-            max_lines = 30  # 基准最大行数
-            min_font_size = 12  # 最小字体大小
-            
-            if len(content_lines) > max_lines:
-                # 计算缩放比例
-                scale_factor = max(min_font_size / base_font_size_text, max_lines / len(content_lines))
-                scaled_font_text = int(base_font_size_text * scale_factor)
-                scaled_font_info = int(base_font_size_info * scale_factor)
-                
-                # 重新加载缩放后的字体
-                for font_path in font_paths:
-                    try:
-                        if font_path:
-                            font_text = ImageFont.truetype(font_path, scaled_font_text)
-                            font_info = ImageFont.truetype(font_path, scaled_font_info)
-                            break
-                    except:
-                        continue
-                
-                # 重新计算内容行数（字体变小后每行能容纳更多字符）
-                content_lines = []
-                for para in paragraphs:
-                    if para.strip():
-                        current_line = ""
-                        for char in para:
-                            test_line = current_line + char
-                            bbox = draw.textbbox((0, 0), test_line, font=font_text)
-                            line_width = bbox[2] - bbox[0]
-                            
-                            if line_width <= max_content_width:
-                                current_line = test_line
-                            else:
-                                if current_line:
-                                    content_lines.append(current_line)
-                                current_line = char
-                        
-                        if current_line:
-                            content_lines.append(current_line)
-                    else:
-                        content_lines.append("")
-                
-                self.log(f"   📏 内容过长({len(content_lines)}行)，字体缩放至 {scaled_font_text}px")
-
-            
-            # 绘制全部内容（不再截断）
-            # 创建干扰文字的小字体
-            try:
-                font_noise = ImageFont.truetype("C:\\Windows\\Fonts\\msyh.ttc", 16)
-            except:
-                font_noise = ImageFont.load_default()
-            noise_color = (140, 140, 140)  # 极浅色，几乎不可见
-            
-            # 计算中间位置的两行进行重叠干扰
-            total_lines = len([l for l in content_lines if l])  # 非空行总数
-            overlap_lines = set()
-            for start in range(1, total_lines + 1, 10):
-                end = min(start + 9, total_lines)
-                # 在当前10行中随机选2行（相邻）
-                if end - start + 1 >= 2:
-                    overlap_start = random.randint(start, end - 1)
-                    overlap_lines.add(overlap_start)
-                    overlap_lines.add(overlap_start + 1)
-            
-            line_count = 0
-            for line in content_lines:
-                if line:
-                    draw.text((40, y), line, fill=text_color, font=font_text, stroke_width=1, stroke_fill=(240, 240, 240))
-                    
-                    # 行间距：重叠行缩小间距
-                    if line_count + 1 in overlap_lines and (line_count + 2) in overlap_lines:
-                        y += 16  # 重叠行的第一行后减少间距
-                    elif line_count + 1 in overlap_lines and (line_count) in overlap_lines:
-                        y += 22  # 重叠行的第二行后恢复正常间距
-                    else:
-                        y += 22  # 正常行距
-                    
-                    line_count += 1
-                    
-                    # 第6行插入干扰文字
-                    if line_count == 6:
-                        y += 15
-                        noise_text = "六便士仅有企业微信推送群，QQ皆为转发，长期稳定推送，请务必添加原作者微信：MK0914666"
-                        draw.text((40, y), noise_text, fill=noise_color, font=font_noise)                        
-                        y += 35
-
-            # 🆕 如果有提问图片，下载并嵌入
-            if question_images and crawler:
-                self.log(f"   🖼️ 检测到{len(question_images)}张提问图片，开始嵌入...")
-                
-                temp_dir = os.path.join(os.path.dirname(__file__), "temp_images")
-                os.makedirs(temp_dir, exist_ok=True)
-                
-                downloaded_images = []
-                for img_url in question_images:
-                    img_path = self._download_image(img_url, temp_dir)
-                    if img_path:
-                        downloaded_images.append(img_path)
-                
-                if downloaded_images:
-                    # 计算需要的额外高度
-                    max_img_width = img_width - 80
-                    total_img_height = 0
-                    resized_images = []
-                    
-                    for img_path in downloaded_images:
-                        try:
-                            img = Image.open(img_path)
-                            # 宽度缩放
-                            if img.width > max_img_width:
-                                scale = max_img_width / img.width
-                                new_height = int(img.height * scale)
-                                img = img.resize((max_img_width, new_height), Image.LANCZOS)
-
-                            # 🆕 限制最大高度（压缩图片）
-                            max_img_height = 600  # 最大高度限制
-                            if img.height > max_img_height:
-                                scale = max_img_height / img.height
-                                new_width = int(img.width * scale)
-                                img = img.resize((new_width, max_img_height), Image.LANCZOS)
-
-                            resized_images.append(img)
-                            total_img_height += img.height + 10  # 减少图片间距
-                        except Exception as e:
-                            self.log(f"   ⚠️ 图片处理失败: {e}")
-                    
-                    if resized_images:
-                        # 计算剩余可用高度
-                        remaining_height = img_height - y - 100  # 预留底部声明空间
-                        
-                        # 如果图片总高度超过剩余空间，按比例缩放
-                        if total_img_height > remaining_height:
-                            scale = remaining_height / total_img_height
-                            for i, img in enumerate(resized_images):
-                                new_width = int(img.width * scale)
-                                new_height = int(img.height * scale)
-                                resized_images[i] = img.resize((new_width, new_height), Image.LANCZOS)
-                            self.log(f"   📐 图片已缩放以适应A4格式")
-                        
-                        # 直接在原图上绘制，不扩展高度
-                        draw.text((40, y), "【图片】:", fill=text_color, font=font_text)
-                        y += 30
-                        
-                        for img in resized_images:
-                            image.paste(img, (40, y))
-                            y += img.height + 10
-                        self.log(f"   ✅ 已嵌入{len(resized_images)}张提问图片")
-                    
-                    # 清理临时图片
-                    for img_path in downloaded_images:
-                        try:
-                            os.remove(img_path)
-                        except:
-                            pass
-            
-            # 保存图片到临时目录
-            temp_dir = os.path.join(os.path.dirname(__file__), "temp_images")
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # 生成文件名（使用时间戳避免冲突）
-            import time
-            timestamp = int(time.time() * 1000)
-            image_filename = f"text_msg_{timestamp}.png"
-            image_path = os.path.join(temp_dir, image_filename)
-            
-            # 保存图片
-            image.save(image_path, 'PNG', optimize=True)
-            
-            self.log(f"   ✅ 文本已转换为图片: {image_path}")
-            return image_path
-            
-        except Exception as e:
-            self.log(f"   ❌ 文本转图片失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
-    
-    def _handle_text_message(self, index: int, title: str, content: str, author_name: str, 
-                   create_time: str, total: int, 
-                   question_images: Optional[List[str]] = None,
-                   crawler = None) -> bool:
-        """
-        处理纯文本消息推送（分支4）
-        修改：先将文本转换为图片，然后推送图片
-        """
-        try:
-            # 清理HTML标签
-            title = clean_html_tags(title)
-            content = clean_html_tags(content)
-            
-            # ✅ 修改：将文本转换为图片
-            image_path = self._text_to_image(
-                title=title,
-                content=content,
-                author_name=author_name,
-                create_time=create_time,
-                index=index,
-                total=total,
-                question_images=question_images,
-                crawler=crawler
-        )
-            
-            if not image_path:
-                self.log(f"❌ 第{index}/{total}条：文本转图片失败")
-                return False
-            
-            # ✅ 修改：发送图片而不是markdown消息
-            if self.send_image(image_path):
-                self.log(f"✅ 第{index}/{total}条推送成功（图片）")
-                
-                # 清理临时图片文件
-                try:
-                    os.remove(image_path)
-                    self.log(f"   🗑️ 已删除临时图片: {image_path}")
-                except:
-                    pass
-                
-                return True
-            else:
-                self.log(f"❌ 第{index}/{total}条推送失败")
-                return False
-            
-        except Exception as e:
-            self.log(f"❌ 第{index}条文本推送异常: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-

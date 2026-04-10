@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { X, Minimize2, Maximize2, Terminal, MessageSquare, Square, AlertTriangle } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/api';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,7 +57,6 @@ export default function TaskLogViewer({
     if (!taskId) return;
 
     // 建立SSE连接
-    const API_BASE_URL = 'http://localhost:8208';
     const eventSource = new EventSource(`${API_BASE_URL}/api/tasks/${taskId}/stream`);
     eventSourceRef.current = eventSource;
 

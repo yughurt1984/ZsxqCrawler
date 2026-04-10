@@ -47,6 +47,7 @@ cache
 /.history/
 /downloads/
 /output/
+temp_pdf_pages/
 
 # local config
 config.toml

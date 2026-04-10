@@ -7,22 +7,25 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+//import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { User, LogOut, CreditCard, ArrowLeft, MessageSquare, Clock, Search, Download, BarChart3, FileText, RefreshCw, Heart, MessageCircle, TrendingUp, Calendar, Settings, Edit, File, FileImage, FileVideo, FileAudio, Archive, ExternalLink, BookOpen } from 'lucide-react';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+//import { AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { User, LogOut, CreditCard, ArrowLeft, MessageSquare, Clock, Search, Download, FileText, RefreshCw, Heart, MessageCircle, Settings, File, FileImage, FileVideo, FileAudio, Archive } from 'lucide-react';
+//import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { apiClient, Group, GroupStats, Topic, FileStatus, Account, AccountSelf } from '@/lib/api';
 import { toast } from 'sonner';
 import SafeImage from '@/components/SafeImage';
 import TaskLogViewer from '@/components/TaskLogViewer';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { createSafeHtmlWithHighlight, extractPlainText } from '@/lib/zsxq-content-renderer';
-import DownloadSettingsDialog from '@/components/DownloadSettingsDialog';
-import CrawlSettingsDialog from '@/components/CrawlSettingsDialog';
+//import DownloadSettingsDialog from '@/components/DownloadSettingsDialog';
+//import CrawlSettingsDialog from '@/components/CrawlSettingsDialog';
 import ImageGallery from '@/components/ImageGallery';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import AuthDialog from '@/components/AuthDialog';
+import WatermarkCard from '@/components/WatermarkCard';
+import { insertHiddenWatermark } from '@/utils/watermark.js';
+import { API_BASE_URL } from '@/lib/api';
 
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -445,7 +448,7 @@ export default function GroupDetailPage() {
   // 加载群组定价信息
   const loadGroupProduct = async () => {
     try {
-      const response = await fetch('http://localhost:8209/api/groups/products');
+      const response = await fetch(`${API_BASE_URL}/api/groups/products`);
       const data = await response.json();
       const product = data.products.find((p: any) => p.group_id === groupId);
       setGroupProduct(product || null);
@@ -1502,20 +1505,35 @@ export default function GroupDetailPage() {
                   )}
 
                 </div>
-              ) : (
+              ) : topic.talk_text ? (
                 // 其他类型话题
                 <div className="w-full">
-                  {topic.talk_text ? (
-                    <div className="w-full">
-                      <div ref={contentRef} className="bg-gray-50 rounded-lg p-3 w-full max-w-full overflow-hidden" style={{minWidth: 0}}>
+                  <WatermarkCard
+
+                      userId={currentUser?.id?.toString() || 'guest'}
+                      username={currentUser?.username || '游客'}
+                      watermarkColor="rgba(0, 0, 0, 0.20)"
+                      watermarkFontSize={20}
+                      className="w-full max-w-full rounded-lg"
+                      style={{ padding: '12px', minHeight: 'auto', minWidth: 0 }}
+                    >
+                      <div ref={contentRef}>
                         <div
-                          className={`text-sm text-gray-800 whitespace-pre-wrap break-words break-all prose prose-sm max-w-none prose-p:my-1 prose-strong:text-gray-900 prose-a:text-blue-600 ${
-                            !expandedContent.has(topic.topic_id) ? 'line-clamp-8' : ''
-                          }`}
-                          style={{wordBreak: 'break-all', overflowWrap: 'anywhere'}}
-                          dangerouslySetInnerHTML={createSafeHtmlWithHighlight(topic.talk_text, searchTerm)}
+                          className={`text-sm text-gray-800 whitespace-pre-wrap break-words break-all prose prose-sm max-w-none prose-p:my-1 prose-strong:text-gray-900 prose-a:text-blue-600 ${!expandedContent.has(topic.topic_id) ? 'line-clamp-8' : ''
+                            }`}
+                          style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}
+                          dangerouslySetInnerHTML={{
+                            __html: insertHiddenWatermark(
+                              createSafeHtmlWithHighlight(topic.talk_text, searchTerm).__html,
+                              currentUser?.id?.toString() || 'guest',
+                              2  // 每2个块级元素插入一次
+                            )
+                          }}
                         />
                       </div>
+                    </WatermarkCard>
+
+
                       {(extractPlainText(topic.talk_text).split('\n').length > 4 || extractPlainText(topic.talk_text).length > 300) && (
                         <div className="text-center mt-2">
                           <button type="button"
@@ -1531,9 +1549,8 @@ export default function GroupDetailPage() {
                     <div className="w-full">
                       <div className="bg-gray-50 rounded-lg p-3 w-full max-w-full overflow-hidden">
                         <div
-                          className={`text-sm text-gray-800 break-words prose prose-sm max-w-none prose-p:my-1 prose-strong:text-gray-900 prose-a:text-blue-600 ${
-                            !expandedContent.has(topic.topic_id) ? 'line-clamp-8' : ''
-                          }`}
+                          className={`text-sm text-gray-800 break-words prose prose-sm max-w-none prose-p:my-1 prose-strong:text-gray-900 prose-a:text-blue-600 ${!expandedContent.has(topic.topic_id) ? 'line-clamp-8' : ''
+                            }`}
                           dangerouslySetInnerHTML={createSafeHtmlWithHighlight(topic.title, searchTerm)}
                         />
                       </div>
@@ -1548,11 +1565,7 @@ export default function GroupDetailPage() {
                         </div>
                       )}
                     </div>
-                  ) : null}
-                </div>
-              )}
-            </div>
-
+                  ) : null}          
 
             {/* 话题图片 */}
             {topicDetail?.talk?.images && topicDetail.talk.images.length > 0 && (
@@ -1668,14 +1681,14 @@ export default function GroupDetailPage() {
                               // 直接检查本地文件
                               try {
                                 const checkRes = await fetch(
-                                  `http://localhost:8209/api/files/check-local-simple/${groupId}?file_name=${encodeURIComponent(file.name)}&file_size=${file.size}`
+                                `${API_BASE_URL}/api/files/check-local-simple/${groupId}?file_name=${encodeURIComponent(file.name)}&file_size=${file.size}`
                                 ).then(r => r.json());
 
                                 if (checkRes.exists) {
                                   // 本地文件存在，直接下载
                                   toast.success(`正在打开: ${checkRes.matched_file}`);
                                   window.open(
-                                    `http://localhost:8209/api/files/download-local/${groupId}?file_name=${encodeURIComponent(file.name)}&file_size=${file.size}`,
+                                    `${API_BASE_URL}/api/files/download-local/${groupId}?file_name=${encodeURIComponent(file.name)}&file_size=${file.size}`,
                                     '_blank'
                                   );
                                   return;
@@ -1855,6 +1868,7 @@ export default function GroupDetailPage() {
                   </div>
               );
             })()}
+            </div>
 
             {/* 统计信息 */}
             <div className="flex items-center justify-between text-sm text-gray-500 pt-2 border-t border-gray-100">
@@ -1875,7 +1889,6 @@ export default function GroupDetailPage() {
       </div>
     );
   };
-
 
 
   const getGradientByType = (type: string) => {

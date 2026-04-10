@@ -1,3 +1,8 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable react/no-unescaped-entities */
+
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -14,6 +19,7 @@ import {
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
+import { API_BASE_URL } from '@/lib/api';
 import { 
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, 
@@ -172,7 +178,7 @@ export default function AdminPage() {
   const loadServerImages = async () => {
     setLoadingImages(true);
     try {
-      const response = await fetch('http://localhost:8209/api/admin/images', {
+      const response = await fetch(`${API_BASE_URL}/api/admin/images`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -967,7 +973,7 @@ export default function AdminPage() {
                         onClick={() => selectServerImage(img.url)}
                       >
                         <img
-                          src={`http://localhost:8209${img.url}`}
+                          src={`${API_BASE_URL}${img.url}`}
                           alt={img.filename}
                           className="w-full h-32 object-cover"
                         />
