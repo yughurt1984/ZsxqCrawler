@@ -888,6 +888,24 @@ async def admin_grant_subscription(data: dict, request: Request):
     finally:
         conn.close()
 
+@app.put("/api/admin/subscriptions/{user_id}/{group_id}")
+async def admin_update_subscription(user_id: int, group_id: int, data: dict, request: Request):
+    """更新用户订阅"""
+    # TODO: 添加管理员权限检查
+    conn = _get_conn()
+    try:
+        result = conn.execute(
+            """UPDATE group_permissions 
+            SET expire_at = ?, subscription_type = ?
+            WHERE user_id = ? AND group_id = ?""",
+            (data["expire_at"], data.get("subscription_type", "monthly"), user_id, group_id)
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            raise HTTPException(404, "订阅不存在")
+        return {"success": True}
+    finally:
+        conn.close()
 
 @app.delete("/api/admin/subscriptions/{user_id}/{group_id}")
 async def admin_revoke_subscription(user_id: int, group_id: int, request: Request):

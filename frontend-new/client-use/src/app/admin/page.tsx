@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -14,8 +14,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { 
-  ArrowLeft, Users, Package, CreditCard, Search, Plus, Edit, Trash2, 
-  CheckCircle, XCircle, Clock, DollarSign, Eye, EyeOff
+  ArrowLeft, Users, Package, CreditCard, Plus, Edit, Trash2, 
+  Eye, EyeOff
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
@@ -59,6 +59,12 @@ interface Subscription {
   subscription_type: string;
   username?: string;
   group_name?: string;
+}
+
+interface GroupedSubscription {
+  user_id: number;
+  username: string;
+  subscriptions: Subscription[];
 }
 
 export default function AdminPage() {
@@ -106,6 +112,34 @@ export default function AdminPage() {
     expire_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     subscription_type: 'monthly'
   });
+
+  // 按用户分组订阅
+  const groupedSubscriptions = useMemo(() => {
+    const groups: { [key: number]: GroupedSubscription } = {};
+    
+    // 先过滤搜索
+    const filtered = subscriptions.filter(sub => {
+      const query = subSearch.toLowerCase();
+      return !query || 
+        sub.user_id.toString().includes(query) ||
+        (sub.username || '').toLowerCase().includes(query) ||
+        sub.group_id.toString().includes(query) ||
+        (sub.group_name || '').toLowerCase().includes(query);
+    });
+    
+    filtered.forEach(sub => {
+      if (!groups[sub.user_id]) {
+        groups[sub.user_id] = {
+          user_id: sub.user_id,
+          username: sub.username || `用户${sub.user_id}`,
+          subscriptions: []
+        };
+      }
+      groups[sub.user_id].subscriptions.push(sub);
+    });
+    
+    return Object.values(groups);
+  }, [subscriptions, subSearch]);
 
   
   // 检查管理员权限
@@ -332,27 +366,6 @@ export default function AdminPage() {
       console.error('加载订阅失败:', e);
     } finally {
       setSubsLoading(false);
-    }
-  };
-
-  const grantSubscription = async (userId: number, groupId: number, days: number, type: string) => {
-    try {
-      const expireAt = new Date();
-      expireAt.setDate(expireAt.getDate() + days);
-      
-      await apiClient.request('/api/admin/grant-subscription', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: userId,
-          group_id: groupId,
-          expire_at: expireAt.toISOString().split('T')[0],
-          subscription_type: type
-        })
-      });
-      toast.success('授权成功');
-      loadSubscriptions();
-    } catch (e) {
-      toast.error('授权失败');
     }
   };
 
@@ -832,9 +845,12 @@ export default function AdminPage() {
                         }
                         setShowSubForm(false);
                       }}>
-                        {editingSub ? '更新' : '创建'}
+                        {editingSub ? '更新' : '确定'}
                       </Button>
-                      <Button variant="outline" onClick={() => setShowSubForm(false)}>取消</Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowSubForm(false)
+                        setEditingSub(null);  // ⭐ 添加这行：重置编辑状态
+                      }}>取消</Button>
                     </div>
 
                   </div>
@@ -854,85 +870,99 @@ export default function AdminPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>用户ID</TableHead>
-                      <TableHead>用户名</TableHead>
-                      <TableHead>群组ID</TableHead>
-                      <TableHead>订阅类型</TableHead>
-                      <TableHead>授权时间</TableHead>
-                      <TableHead>到期时间</TableHead>
-                      <TableHead>状态</TableHead>
-                      <TableHead>操作</TableHead>
+                      <TableHead className="w-20">用户ID</TableHead>
+                      <TableHead className="w-24">用户名</TableHead>
+                      <TableHead className="w-20">群组ID</TableHead>
+                      <TableHead className="w-28">群组名称</TableHead>
+                      <TableHead className="w-24">订阅类型</TableHead>
+                      <TableHead className="w-28">授权时间</TableHead>
+                      <TableHead className="w-28">到期时间</TableHead>
+                      <TableHead className="w-20">状态</TableHead>
+                      <TableHead className="w-24">操作</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {subsLoading ? (
-                      <TableRow><TableCell colSpan={8} className="text-center">加载中...</TableCell></TableRow>
-                    ) : subscriptions.length === 0 ? (
-                      <TableRow><TableCell colSpan={8} className="text-center text-gray-500">暂无订阅记录</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={9} className="text-center py-4">加载中...</TableCell></TableRow>
+                    ) : groupedSubscriptions.length === 0 ? (
+                      <TableRow><TableCell colSpan={9} className="text-center py-4 text-gray-500">暂无订阅记录</TableCell></TableRow>
                     ) : (
-                      subscriptions.map((sub, idx) => {
-                        const isExpired = new Date(sub.expire_at) < new Date();
-                        return (
-                          <TableRow key={idx}>
-                            <TableCell>{sub.user_id}</TableCell>
-                            <TableCell>{sub.username || '-'}</TableCell>
-                            <TableCell>{sub.group_id}</TableCell>
-                            <TableCell>
-                              <Badge variant="outline">{sub.subscription_type}</Badge>
-                            </TableCell>
-                            <TableCell>{new Date(sub.granted_at).toLocaleDateString()}</TableCell>
-                            <TableCell>{new Date(sub.expire_at).toLocaleDateString()}</TableCell>
-                            <TableCell>
-                              {isExpired ? (
-                                <Badge className="bg-red-100 text-red-700">已过期</Badge>
-                              ) : (
-                                <Badge className="bg-green-100 text-green-700">有效</Badge>
+                      groupedSubscriptions.map((group) => (
+                        group.subscriptions.map((sub, idx) => {
+                          const isExpired = new Date(sub.expire_at) < new Date();
+                          const isFirst = idx === 0;
+                          return (
+                            <TableRow key={`${group.user_id}-${sub.group_id}`} className="border-b">
+                              {isFirst && (
+                                <>
+                                  <TableCell rowSpan={group.subscriptions.length} className="align-middle font-medium">
+                                    {group.user_id}
+                                  </TableCell>
+                                  <TableCell rowSpan={group.subscriptions.length} className="align-middle">
+                                    {group.username}
+                                  </TableCell>
+                                </>
                               )}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => {
-                                    setSubForm({
-                                      user_id: sub.user_id.toString(),
-                                      group_id: sub.group_id.toString(),
-                                      granted_at: sub.granted_at.split('T')[0],
-                                      expire_at: sub.expire_at.split('T')[0],
-                                      subscription_type: sub.subscription_type
-                                    });
-                                    setShowSubForm(true);
-                                  }}
-                                >
-                                  <Edit className="h-4 w-4" />
-                                </Button>
-                                <AlertDialog>
-                                  <AlertDialogTrigger asChild>
-                                    <Button size="sm" variant="ghost" className="text-red-600">
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
-                                  </AlertDialogTrigger>
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>确认撤销</AlertDialogTitle>
-                                      <AlertDialogDescription>
-                                        确定要撤销该用户对此群组的访问权限吗？
-                                      </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>取消</AlertDialogCancel>
-                                      <AlertDialogAction onClick={() => revokeSubscription(sub.user_id, sub.group_id)}>
-                                        确认撤销
-                                      </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })
+                              <TableCell>{sub.group_id}</TableCell>
+                              <TableCell>{sub.group_name || '-'}</TableCell>
+                              <TableCell>
+                                <Badge variant="outline">{sub.subscription_type}</Badge>
+                              </TableCell>
+                              <TableCell>{new Date(sub.granted_at).toLocaleDateString()}</TableCell>
+                              <TableCell>{new Date(sub.expire_at).toLocaleDateString()}</TableCell>
+                              <TableCell>
+                                {isExpired ? (
+                                  <Badge className="bg-red-100 text-red-700">已过期</Badge>
+                                ) : (
+                                  <Badge className="bg-green-100 text-green-700">有效</Badge>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      setEditingSub(sub);
+                                      setSubForm({
+                                        user_id: sub.user_id.toString(),
+                                        group_id: sub.group_id.toString(),
+                                        granted_at: sub.granted_at.split('T')[0],
+                                        expire_at: sub.expire_at.split('T')[0],
+                                        subscription_type: sub.subscription_type
+                                      });
+                                      setShowSubForm(true);
+                                    }}
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                  <AlertDialog>
+                                    <AlertDialogTrigger asChild>
+                                      <Button size="sm" variant="ghost" className="text-red-600">
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                      <AlertDialogHeader>
+                                        <AlertDialogTitle>确认撤销</AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                          确定要撤销该用户对群组「{sub.group_name || sub.group_id}」的访问权限吗？
+                                        </AlertDialogDescription>
+                                      </AlertDialogHeader>
+                                      <AlertDialogFooter>
+                                        <AlertDialogCancel>取消</AlertDialogCancel>
+                                        <AlertDialogAction onClick={() => revokeSubscription(sub.user_id, sub.group_id)}>
+                                          确认撤销
+                                        </AlertDialogAction>
+                                      </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                  </AlertDialog>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      ))
                     )}
                   </TableBody>
                 </Table>
