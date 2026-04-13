@@ -15,15 +15,15 @@ from xhtml2pdf import pisa
 from io import BytesIO
 from urllib.parse import urlparse
 import textwrap  # ✅ 添加文本换行支持
-from PyPDF2 import PdfReader, PdfWriter,PdfMerger
+import fitz  # PyMuPDF
 import traceback
 import hashlib
-from PIL import Image, ImageDraw, ImageFont  # ✅ 添加PIL导入
 import random
 import time
 from datetime import datetime
-import platform
 import shutil
+from PIL import Image, ImageDraw, ImageFont
+
 
 class HTMLTagRemover(HTMLParser):
     """HTML标签清理器"""
@@ -94,6 +94,14 @@ def clean_html_tags(text: str) -> str:
 class WeComWebhook:
     """企业微信机器人Webhook推送类"""
     
+    # ========== 干扰功能配置 ==========
+        # 需要启用干扰功能的群组ID列表（在此配置）
+    NOISE_GROUPS = [
+        # "your_group_id_1",  # 示例：替换为实际群组ID
+        # "your_group_id_2",
+        "28858542222551"
+    ]
+        
     def __init__(self, webhook_url: str, enabled: bool = True, log_callback=None):
         """
         初始化企业微信Webhook
@@ -440,17 +448,16 @@ class WeComWebhook:
                                 image_paths.append(img_path)
                         
                         if image_paths:
-                            # 创建图片PDF（已使用背景图片含水印）
-                            images_pages = self._create_images_pages(image_paths)
-                            if images_pages:
-                                # 直接保存并发送
-                                timestamp = int(time.time() * 1000)
-                                images_pdf = os.path.join(pdf_output_dir, f"images_{i}_{timestamp}.pdf")
-                                images_pages[0].save(images_pdf, 'PDF', save_all=True, append_images=images_pages[1:], dpi=(300, 300))
+                            # 创建图片PDF（使用 PyMuPDF）
+                            timestamp = int(time.time() * 1000)
+                            images_pdf = os.path.join(pdf_output_dir, f"images_{i}_{timestamp}.pdf")
+                            if self._create_images_pdf_with_mupdf(image_paths, images_pdf):
                                 if self.send_file(images_pdf):
                                     self.log(f"   ✅ 图片PDF推送成功")
                                 else:
                                     self.log(f"   ⚠️ 图片PDF推送失败")
+                            else:
+                                self.log(f"   ❌ 图片PDF生成失败")
                     
                     if attachment_success:
                         success_count += 1
@@ -471,7 +478,8 @@ class WeComWebhook:
                         index=i,
                         total=len(new_topics),
                         image_urls=all_content_images,
-                        output_dir=pdf_output_dir
+                        output_dir=pdf_output_dir,
+                        group_id=crawler.group_id  # 新增
                     )
                     
                     if pdf_path:
@@ -494,7 +502,9 @@ class WeComWebhook:
                     create_time=create_time,
                     index=i,
                     total=len(new_topics),
-                    output_dir=pdf_output_dir
+                    output_dir=pdf_output_dir,
+                    group_id=crawler.group_id  # 新增
+
                 )
                 
                 if pdf_path:
@@ -590,10 +600,10 @@ class WeComWebhook:
                 safe_title = re.sub(r'\s+', '', safe_title)
                 if len(safe_title) > 100:
                     safe_title = safe_title[:100]
-                pdf_filename = f"{safe_title}_添加作者微信MK0914666.pdf"
+                pdf_filename = f"{safe_title}.pdf"
             else:
                 file_hash = hashlib.md5(url.encode()).hexdigest()[:12]
-                pdf_filename = f"article_{file_hash}_添加作者微信MK0914666.pdf"
+                pdf_filename = f"article_{file_hash}.pdf"
             
             pdf_path = os.path.join(output_dir, pdf_filename)
             
@@ -739,12 +749,12 @@ class WeComWebhook:
 
 
     def convert_text_to_pdf(self, title: str, content: str, author_name: str,
-                            create_time: str, index: int, total: int,
-                            output_dir: str) -> Optional[str]:
+                        create_time: str, index: int, total: int,
+                        output_dir: str, group_id: str = None) -> Optional[str]:
+
         """
         将文本内容转换为PDF（分支4使用）
-        使用PIL绘制，保留原有样式
-        
+                
         Args:
             title: 标题
             content: 内容
@@ -771,7 +781,8 @@ class WeComWebhook:
                 image_urls=[],  # 纯文本，无图片
                 index=index,
                 total=total,
-                output_dir=output_dir
+                output_dir=output_dir,
+                group_id=group_id
             )
             
             return pdf_path
@@ -784,11 +795,13 @@ class WeComWebhook:
 
 
     def convert_text_and_images_to_pdf(self, title: str, content: str, author_name: str,
-                                    create_time: str, index: int, total: int,
-                                    image_urls: List[str], output_dir: str) -> Optional[str]:
+                                create_time: str, index: int, total: int,
+                                image_urls: List[str], output_dir: str,
+                                group_id: str = None) -> Optional[str]:
+
         """
         将文本内容和图片合并成一个PDF（分支3使用）
-        使用PIL绘制，保留原有样式
+        
         """
         try:
             os.makedirs(output_dir, exist_ok=True)
@@ -806,7 +819,7 @@ class WeComWebhook:
                 except Exception as e:
                     self.log(f"   ⚠️ 图片{i}下载失败: {e}")
             
-            # 使用PIL绘制PDF
+            # 绘制PDF
             pdf_path = self._text_and_images_to_pdf(
                 title=title,
                 content=content,
@@ -815,7 +828,9 @@ class WeComWebhook:
                 image_paths=image_paths,
                 index=index,
                 total=total,
-                output_dir=output_dir
+                output_dir=output_dir,
+                group_id=group_id
+
             )
             
             return pdf_path
@@ -825,8 +840,6 @@ class WeComWebhook:
             import traceback
             traceback.print_exc()
             return None
-
-
 
     def _format_file_size(self, size_bytes: int) -> str:
         """格式化文件大小"""
@@ -889,12 +902,27 @@ class WeComWebhook:
             )
             
             if pdf_path:
-                # 添加水印模板
-                temp_pdf_path = pdf_path.replace('.pdf', '_temp.pdf')
-                if self._merge_with_template(pdf_path, temp_pdf_path):
-                    import shutil
-                    shutil.move(temp_pdf_path, pdf_path)
-                    self.log(f"   📋 已添加水印模板")
+                # 添加背景和干扰
+                temp_pdf_path = pdf_path.replace('.pdf', '_temp_with_bg.pdf')
+                if self._add_background_and_noise_to_pdf(pdf_path, temp_pdf_path, group_id=crawler.group_id):
+                    # 加密
+                    self._encrypt_pdf(temp_pdf_path)
+                    
+                    # 重命名
+                    final_path = pdf_path.replace('.pdf', '_作者微信MK0914666.pdf')
+                    shutil.move(temp_pdf_path, final_path)
+                    
+                    # 删除原文件
+                    try:
+                        os.remove(pdf_path)
+                    except:
+                        pass
+                    
+                    pdf_path = final_path
+                    self.log(f"   📋 已添加背景和干扰")
+                else:
+                    # 失败时仍然加密原文件
+                    self._encrypt_pdf(pdf_path)
                 
                 if self.send_file(pdf_path):
                     self.log(f"   ✅ PDF发送成功")
@@ -911,94 +939,221 @@ class WeComWebhook:
 
     
     def _handle_attachments(self, index: int, topic_files: List[Dict], title: str, crawler, total: int) -> bool:
-        """处理附件下载和推送（分支2）"""
+        """处理附件下载和推送（分支2）
+        
+        处理流程：
+        1. 下载源文件
+        2. 添加水印
+        3. 加密
+        4. 删除源文件，只保留处理后的文件
+        5. 推送
+        """
         try:
-            self.log(f"📎 第{index}/{total}条：检测到附件（共{len(topic_files)}个），开始下载...")
+            self.log(f"📎 第{index}/{total}条：检测到附件（共{len(topic_files)}个）")
             
             # 获取文件下载器
             downloader = crawler.get_file_downloader()
             
-            # 下载所有附件
-            downloaded_count = 0
             pushed_count = 0
             for file_info in topic_files:
                 try:
                     # 构造file_info字典
                     file_data = {'file': file_info}
                     
-                    # 下载文件
-                    result = downloader.download_file(file_data)
+                    # 获取文件名
+                    file_name = file_info.get('name', 'Unknown')
+                    # 清理文件名（保留中文）
+                    safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}' or '\u4e00' <= c <= '\u9fff')
+                    if not safe_filename:
+                        safe_filename = f"file_{file_info.get('id', 'unknown')}"
                     
-                    if result == "skipped":
-                        self.log(f"   ⏭️ 文件已存在，跳过: {file_info.get('name', 'Unknown')}")
-                    elif result:  # ✅ 返回的是文件路径（字符串）
-                        downloaded_count += 1
-                        
-                        # ✅ 获取文件信息（用于构造文件路径）
-                        file_name = file_info.get('name', 'Unknown')
-                        
-                        # 清理文件名（移除非法字符）
-                        safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}')
-                        
-                        # ✅ 构造文件路径（与download_file中的逻辑一致）
-                        file_path = os.path.join(downloader.download_dir, safe_filename)
-                        
-                        # ✅ 统一在这里推送到企业微信
-                        # ✅ 检查文件是否存在
-                        if os.path.exists(file_path):
-                            # 添加水印（如果是PDF文件）
-                            if file_path.lower().endswith('.pdf'):
-                                self.log(f"   🖼️ 检测到PDF附件，添加水印...")
-                                # ⭐ 实际添加水印
-                                watermarked_path = file_path.replace('.pdf', '_添加作者微信MK0914666.pdf')
-                                if self._merge_with_template(file_path, watermarked_path):
-                                    self.log(f"   ✅ 水印添加成功")
-                                    # 发送带水印的PDF
-                                    if self.send_file(watermarked_path):
-                                        self.log(f"   ✅ 企业微信推送成功")
-                                        pushed_count += 1
-                                    else:
-                                        self.log(f"   ⚠️ 企业微信推送失败")
-                                    # 清理临时文件
-                                    try:
-                                        os.remove(watermarked_path)
-                                    except:
-                                        pass
-                                else:
-                                    # 水印添加失败，发送原始文件
-                                    self.log(f"   ⚠️ 水印添加失败，发送原始文件")
-                                    if self.send_file(file_path):
-                                        self.log(f"   ✅ 企业微信推送成功")
-                                        pushed_count += 1
-                                    else:
-                                        self.log(f"   ⚠️ 企业微信推送失败")
-                            else:
-                                # 非PDF文件，直接发送
-                                self.log(f"   📱 正在推送到企业微信: {file_info.get('name', 'Unknown')}")
-                                if self.send_file(file_path):
-                                    self.log(f"   ✅ 企业微信推送成功")
-                                    pushed_count += 1
-                                else:
-                                    self.log(f"   ⚠️ 企业微信推送失败")
+                    # 源文件路径
+                    source_path = os.path.join(downloader.download_dir, safe_filename)
+                    
+                    # 处理后的文件名（改名）
+                    base_name = os.path.splitext(safe_filename)[0]
+                    final_filename = f"{base_name}_作者微信MK0914666.pdf"
+                    final_path = os.path.join(downloader.download_dir, final_filename)
+                    
+                    # ============ 检查最终文件是否已存在 ============
+                    if os.path.exists(final_path):
+                        self.log(f"   ✅ 已存在处理后的文件: {final_filename}")
+                        # 直接推送
+                        if self.send_file(final_path):
+                            self.log(f"   ✅ 企业微信推送成功")
+                            pushed_count += 1
                         else:
-                            self.log(f"   ❌ 文件不存在: {file_path}")
+                            self.log(f"   ⚠️ 企业微信推送失败")
+                        continue
+                    
+                    # ============ 下载源文件（如果不存在） ============
+                    if not os.path.exists(source_path):
+                        result = downloader.download_file(file_data)
+                        if not result:
+                            self.log(f"   ❌ 文件下载失败: {file_name}")
+                            continue
+                        if result == "skipped":
+                            self.log(f"   ⏭️ 文件已存在但未处理: {safe_filename}")
+                    
+                    # 确认源文件存在
+                    if not os.path.exists(source_path):
+                        self.log(f"   ❌ 源文件不存在: {source_path}")
+                        continue
+                    
+                    # ============ 处理PDF文件 ============
+                    if source_path.lower().endswith('.pdf'):
+                        self.log(f"   🖼️ 处理PDF: {safe_filename}")
+                        
+                        # 步骤1: 添加背景和水印
+                        temp_processed = source_path.replace('.pdf', '_temp_processed.pdf')
+                        if not self._add_background_and_noise_to_pdf(source_path, temp_processed, group_id=crawler.group_id if crawler else None):
+                            self.log(f"   ⚠️ 处理失败，使用源文件")
+                            temp_processed = source_path
+                        
+                        # 步骤2: 加密
+                        self._encrypt_pdf(temp_processed)
+                        
+                        # 步骤3: 重命名
+                        shutil.move(temp_processed, final_path)
+                        
+                        # 步骤4: 删除源文件
+                        if source_path != temp_processed:
+                            try:
+                                os.remove(source_path)
+                                self.log(f"   🗑️ 已删除源文件: {safe_filename}")
+                            except:
+                                pass
+                        
+                        self.log(f"   ✅ 处理完成: {final_filename}")
+                        
+                        # 步骤5: 推送
+                        if self.send_file(final_path):
+                            self.log(f"   ✅ 企业微信推送成功")
+                            pushed_count += 1
+                        else:
+                            self.log(f"   ⚠️ 企业微信推送失败")
+
+                            
                     else:
-                        self.log(f"   ❌ 附件下载失败: {file_info.get('name', 'Unknown')}")
+                        # 非PDF文件，直接发送
+                        self.log(f"   📱 正在推送: {safe_filename}")
+                        if self.send_file(source_path):
+                            self.log(f"   ✅ 企业微信推送成功")
+                            pushed_count += 1
+                        else:
+                            self.log(f"   ⚠️ 企业微信推送失败")
+                            
                 except Exception as e:
                     self.log(f"   ❌ 附件处理异常: {e}")
+                    import traceback
+                    traceback.print_exc()
             
-            if downloaded_count > 0:
-                self.log(f"   ✅ 附件处理完成：下载{downloaded_count}个，推送{pushed_count}个")
+            if pushed_count > 0:
+                self.log(f"   ✅ 附件处理完成：推送{pushed_count}个")
                 return True
             else:
-                self.log(f"   ⚠️ 所有附件已存在或下载失败，跳过推送")
+                self.log(f"   ⚠️ 所有附件推送失败")
                 return False
-            
+                
         except Exception as e:
             self.log(f"   ❌ 附件处理异常: {e}")
+            import traceback
+            traceback.print_exc()
             return False
+
+    def _add_background_and_noise_to_pdf(self, source_pdf: str, output_pdf: str, 
+                                         group_id: str = None) -> bool:
+        """
+        为 PDF 添加背景图和干扰功能
+        
+        核心原则：保持源PDF尺寸不变，背景图适配
+        """
+        try:
+            bg_path = os.path.join(os.path.dirname(__file__), "images", "pdf_background.png")
+            temp_dir = os.path.join(os.path.dirname(__file__), "temp_pdf_pages")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            enable_noise = group_id in self.NOISE_GROUPS if group_id else False
+            
+            src_doc = fitz.open(source_pdf)
+            out_doc = fitz.open()
+            
+            # 加载背景图
+            bg_image = None
+            if os.path.exists(bg_path):
+                bg_image = Image.open(bg_path)
+                if bg_image.mode != 'RGB':
+                    bg_image = bg_image.convert('RGB')
+                self.log(f"   📐 背景图尺寸: {bg_image.size[0]} x {bg_image.size[1]}")
+            
+            # 干扰文字配置
+            noise_text = "（原作者微信：MK0914666）"
+            font_path = r"C:\Windows\Fonts\msyh.ttc"
+            font_size = 10
+            font_color = (0, 0, 0)  # 黑色
+            insert_times = 3  # 固定插入3次
+            
+            for page_num in range(len(src_doc)):
+                src_page = src_doc[page_num]
+                src_w = src_page.rect.width
+                src_h = src_page.rect.height
+                
+                # 创建与源PDF相同尺寸的页面
+                out_page = out_doc.new_page(width=src_w, height=src_h)
+                
+                # 插入背景图（缩放到页面尺寸）
+                if bg_image:
+                    temp_bg_path = os.path.join(temp_dir, f"bg_{page_num}.png")
+                    resized_bg = bg_image.resize((int(src_w), int(src_h)), Image.Resampling.LANCZOS)
+                    resized_bg.save(temp_bg_path)
+                    out_page.insert_image(fitz.Rect(0, 0, src_w, src_h), filename=temp_bg_path)
+                    try:
+                        os.remove(temp_bg_path)
+                    except:
+                        pass
+                
+                # 插入源PDF内容（不缩放，直接覆盖）
+                out_page.show_pdf_page(
+                    fitz.Rect(0, 0, src_w, src_h),
+                    src_doc,
+                    page_num
+                )
+                
+                # ============ 添加干扰文字 ============
+                if enable_noise:
+                    for _ in range(insert_times):
+                        # 随机位置
+                        noise_x = random.randint(30, max(31, int(src_w) - 150))
+                        noise_y = random.randint(50, max(51, int(src_h) - 50))
+                        
+                        out_page.insert_text(
+                            fitz.Point(noise_x, noise_y),
+                            noise_text,
+                            fontname="china-s",  # 使用内置简体中文字体
+                            fontfile=font_path,
+                            fontsize=font_size,
+                            color=font_color
+                        )
+                    
+                    self.log(f"   📄 第{page_num+1}页: {src_w:.0f}x{src_h:.0f}, 已添加{insert_times}处干扰文字")
+                else:
+                    self.log(f"   📄 第{page_num+1}页: {src_w:.0f}x{src_h:.0f}")
+            
+            # 保存
+            out_doc.save(output_pdf)
+            out_doc.close()
+            src_doc.close()
+            
+            self.log(f"   ✅ 背景和干扰添加完成")
+            return True
+            
+        except Exception as e:
+            self.log(f"   ❌ 背景添加失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     
-    #图片相关推送处理
     def _extract_images(self, talk: Dict) -> List[str]:
         """
         从内容中提取图片URL列表
@@ -1106,442 +1261,118 @@ class WeComWebhook:
             self.log(f"   ❌ 图片下载异常: {e}")
             return None
 
-    
-    
-    def _merge_with_template(self, content_pdf_path: str, output_path: str) -> bool:
+    def _encrypt_pdf(self, pdf_path: str, owner_password: str = "protect_pdf@Arron") -> bool:
         """
-        将模板作为水印叠加到内容PDF上
-        
+        使用 PyMuPDF 对 PDF 进行加密保护
+        用户无需密码即可打开查看，但无法修改、复制、导出
+
         Args:
-            content_pdf_path: 内容PDF路径
-            output_path: 输出PDF路径
-            
+            pdf_path: PDF 文件路径
+            owner_password: 所有者密码（用于修改权限）
+
         Returns:
             是否成功
         """
-        # 模板PDF路径
-        TEMPLATE_PDF_PATH = os.path.join(os.path.dirname(__file__), "watermark.pdf")
-
         try:
-            if not os.path.exists(TEMPLATE_PDF_PATH):
-                self.log(f"   ⚠️ 模板文件不存在，跳过合并: {TEMPLATE_PDF_PATH}")
-                return False
-            
-            # 读取模板（水印）
-            watermark_reader = PdfReader(TEMPLATE_PDF_PATH)
-            # 读取内容
-            content_reader = PdfReader(content_pdf_path)
-            
-            writer = PdfWriter()
-            
-            for i, content_page in enumerate(content_reader.pages):
-                # 获取内容页的实际尺寸
-                content_width = content_page.mediabox.width
-                content_height = content_page.mediabox.height
-                
-                # 获取水印页（循环使用）
-                watermark_page = watermark_reader.pages[i % len(watermark_reader.pages)]
-                
-                # 获取水印页的尺寸
-                watermark_width = watermark_page.mediabox.width
-                watermark_height = watermark_page.mediabox.height
-                
-                # 计算缩放比例（水印适配内容页尺寸）
-                from PyPDF2 import Transformation
-                
-                scale_x = float(content_width) / float(watermark_width)
-                scale_y = float(content_height) / float(watermark_height)
-                scale = min(scale_x, scale_y)  # 保持比例
-                
-                # 缩放水印页
-                watermark_page.scale(scale, scale)
-                
-                # 将水印叠加到内容页上
-                content_page.merge_page(watermark_page)
-                writer.add_page(content_page)
-            
-            with open(output_path, 'wb') as f:
-                writer.write(f)
-            
-            self.log(f"   📋 已添加水印模板")
+            doc = fitz.open(pdf_path)
+
+            # PyMuPDF 权限值（设置为0表示禁止所有操作，只允许查看）
+            # 权限值定义：允许的操作的组合
+            # 0 = 只读，禁止所有操作
+            perm = 0
+
+            # 加密保存（用户密码为空，允许无密码打开）
+            temp_path = pdf_path + ".encrypted"
+            doc.save(
+                temp_path,
+                encryption=fitz.PDF_ENCRYPT_AES_256,  # AES-256 加密
+                owner_pw=owner_password,              # 所有者密码
+                user_pw="",                           # 用户密码为空
+                permissions=perm                      # 权限：只读
+            )
+            doc.close()
+
+            # 替换原文件
+            os.replace(temp_path, pdf_path)
+
+            self.log(f"   🔒 PDF加密完成（禁止修改/复制/导出）")
             return True
-            
+
         except Exception as e:
-            self.log(f"   ❌ 水印添加失败: {e}")
+            self.log(f"   ❌ PDF加密失败: {e}")
             import traceback
             traceback.print_exc()
             return False
 
+    def _calculate_text_lines(self, content: str, max_width: float, fontsize: int = 18,
+                          font_path: str = None, font_name: str = None) -> list:
+        """计算文字行（自动换行），使用字符宽度估算"""
+        lines = []
+        current_line = ""
+        
+        for char in content:
+            if char == '\n':
+                if current_line:
+                    lines.append(current_line)
+                    current_line = ""
+                lines.append(None)  # 空行标记
+                continue
+            
+            test_line = current_line + char
+            
+            # 计算文字宽度（估算方法）
+            # 中文字符约等于 fontsize 宽度，英文约等于 fontsize * 0.5
+            text_width = 0
+            for c in test_line:
+                if '\u4e00' <= c <= '\u9fff':
+                    text_width += fontsize * 1.0  # 中文字符
+                elif c.isalpha() or c.isdigit():
+                    text_width += fontsize * 0.5  # 英文/数字
+                else:
+                    text_width += fontsize * 0.6  # 其他字符（标点等）
+            
+            if text_width <= max_width:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                current_line = char
+        
+        if current_line:
+            lines.append(current_line)
+        
+        return lines
 
     def _text_and_images_to_pdf(self, title: str, content: str, author_name: str, 
-                                create_time: str, image_paths: List[str], 
-                                index: int, total: int, output_dir: str) -> Optional[str]:
+                            create_time: str, image_paths: List[str], 
+                            index: int, total: int, output_dir: str,
+                            group_id: str = None) -> Optional[str]:
         """
-        将文本内容和图片绘制成PDF（使用PIL绘制，保留样式）
-        第一页：文本内容
-        第二页：图片（如有）
-        
-        Args:
-            title: 标题
-            content: 内容
-            author_name: 作者名
-            create_time: 创建时间
-            image_paths: 图片路径列表
-            index: 当前索引
-            total: 总数
-            output_dir: PDF输出目录
-            
-        Returns:
-            PDF文件路径，失败返回None
+        将文本内容和图片生成PDF（使用 PIL 渲染）
         """
         try:
             # 清理HTML标签
             title = clean_html_tags(title)
             content = clean_html_tags(content)
             
-            # ============ 第一页：文本内容 ============
-            background_image_path = os.path.join(os.path.dirname(__file__), "images", "pdf_background.png")
-            
-            # ============ 第二页：图片 ============
-            text_page = self._create_text_page(
-                title, content, author_name, create_time, index, total,
-                background_image_path=background_image_path
+            # 使用 PIL 渲染
+            pdf_path = self._create_pdf_with_pil(
+                title=title,
+                content=content,
+                author_name=author_name,
+                create_time=create_time,
+                image_paths=image_paths,
+                output_dir=output_dir,
+                group_id=group_id
             )
-            pdf_pages = []  # 👈 添加这一行
-
-            # 临时文件目录（单独存放）
-            temp_dir = os.path.join(os.path.dirname(__file__), "temp_pdf_pages")
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # 保存文本页为临时文件
-            timestamp = int(time.time() * 1000)
-            temp_text_path = os.path.join(temp_dir, f"_temp_text_{timestamp}.png")
-            text_page.save(temp_text_path)
-            pdf_pages.append(temp_text_path)
-            
-            # 处理图片页
-            if image_paths:
-                images_pages = self._create_images_pages(image_paths, background_image_path=background_image_path)
-
-                for i, page in enumerate(images_pages):
-                    temp_images_path = os.path.join(output_dir, f"_temp_images_{timestamp}_{i}.png")
-                    page.save(temp_images_path,quality=95, optimize=False)
-                    pdf_pages.append(temp_images_path)
-                
-            # ============ 合并为PDF ============
-             # 统一命名规则：作者_新内容推送_时间.pdf
-            safe_author = re.sub(r'[^\w\u4e00-\u9fff]', '', author_name)
-            time_str = time.strftime("%Y%m%d_%H%M%S")
-            pdf_filename = f"{safe_author}_新内容推送_{time_str}.pdf"
-            
-            pdf_path = os.path.join(output_dir, pdf_filename)
-            
-            # 检查文件是否存在
-            if os.path.exists(pdf_path):
-                self.log(f"   ⏭️ PDF已存在，跳过: {pdf_filename}")
-                # 清理临时文件
-                for temp_path in pdf_pages:
-                    try:
-                        os.remove(temp_path)
-                    except:
-                        pass
-                return None
-            
-             # 多页合并保存为临时PDF
-            temp_pdf_path = os.path.join(temp_dir, f"_temp_content_{timestamp}.pdf")
-            first_image = Image.open(pdf_pages[0])
-            other_images = [Image.open(p) for p in pdf_pages[1:]]
-            first_image.save(temp_pdf_path, 'PDF', save_all=True, append_images=other_images, dpi=(300, 300))
-            
-            # 清理临时文件
-            for temp_path in pdf_pages:
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-            
-            # 直接保存为最终PDF（已使用背景图片含水印，无需叠加模板）
-            shutil.move(temp_pdf_path, pdf_path)
-            self.log(f"   ✅ PDF生成成功: {pdf_path} (共{len(pdf_pages)}页)")
             
             return pdf_path
             
         except Exception as e:
-            self.log(f"   ❌ 文本和图片合并失败: {e}")
+            self.log(f"   ❌ PDF生成失败: {e}")
             import traceback
             traceback.print_exc()
             return None
-    
-    def _create_text_page(self, title: str, content: str, author_name: str, 
-                      create_time: str, index: int, total: int,
-                      background_image_path: str = None) -> Image.Image:
-        """
-        创建文本页面（A4尺寸，使用背景图片）
-        
-        Returns:
-            PIL Image对象
-        """
-        # A4尺寸 (像素)
-        img_width = 794
-        img_height = 1123
-        footer_reserved = 140  # 底部预留高度
-        editable_height = img_height - footer_reserved  # 可编辑区域高度
-        
-        # ============ 核心修改：加载背景图片 ============
-        if background_image_path and os.path.exists(background_image_path):
-            # 加载背景图片（已含水印和二维码）
-            image = Image.open(background_image_path)
-            # 调整到A4尺寸
-            image = image.resize((img_width, img_height), Image.Resampling.LANCZOS)
-            # 确保是RGB模式
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-        else:
-            # 兜底：白色背景
-            background_color = (255, 255, 255)
-            image = Image.new('RGB', (img_width, img_height), background_color)
-        
-        draw = ImageDraw.Draw(image)
-
-        background_color = (255, 255, 255)
-        temp_image = Image.new('RGB', (img_width, 100), background_color)
-        temp_draw = ImageDraw.Draw(temp_image)
-        
-        # 尝试加载字体（增加对服务器字体的支持）
-        system = platform.system()
-
-        if system == "Windows":
-            font_paths = [
-                "C:\\Windows\\Fonts\\simhei.ttf",
-                "C:\\Windows\\Fonts\\msyh.ttc",
-                "C:\\Windows\\Fonts\\simsun.ttc",
-                None
-            ]
-        else:  # Linux
-            font_paths = [
-                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                None
-            ]
-        
-        font_title = None
-        font_text = None
-        font_info = None
-        
-        for font_path in font_paths:
-            try:
-                if font_path:
-                    font_title = ImageFont.truetype(font_path, 32)
-                    font_text = ImageFont.truetype(font_path, 22)
-                    font_info = ImageFont.truetype(font_path, 16)
-                    break
-            except:
-                continue
-        
-        if font_title is None:
-            font_title = ImageFont.load_default()
-            font_text = ImageFont.load_default()
-            font_info = ImageFont.load_default()
-        
-        # 计算文字行数
-        max_content_width = img_width - 60
-        content_lines = []
-        
-        paragraphs = content.split('\n')
-        for para in paragraphs:
-            if para.strip():
-                current_line = ""
-                for char in para:
-                    test_line = current_line + char
-                    bbox = temp_draw.textbbox((0, 0), test_line, font=font_text)
-                    line_width = bbox[2] - bbox[0]
-                    
-                    if line_width <= max_content_width:
-                        current_line = test_line
-                    else:
-                        if current_line:
-                            content_lines.append(current_line)
-                        current_line = char
-                if current_line:
-                    content_lines.append(current_line)
-            else:
-                content_lines.append("")
-        
-        
-        # 颜色定义
-        title_color = (0, 0, 0)
-        text_color = (70, 70, 70)
-        info_color = (100, 100, 100)
-        border_color = (200, 200, 200)
-        
-        # 创建干扰文字的小字体
-        try:
-            font_noise = ImageFont.truetype("C:\\Windows\\Fonts\\msyh.ttc", 18)
-        except:
-            font_noise = ImageFont.load_default()
-        noise_color = (50, 100, 200)  # 蓝色
-
-        y = 40
-        
-        # 绘制顶部横线
-        draw.rectangle([30, y, img_width - 30, y + 3], fill=border_color)
-        y += 20
-        
-        # 绘制标题
-        title_text = "新内容推送"
-        bbox = draw.textbbox((0, 0), title_text, font=font_title)
-        title_width = bbox[2] - bbox[0]
-        draw.text(((img_width - title_width) // 2, y), title_text, 
-                fill=title_color, font=font_title)
-        y += 50
-        
-        # 绘制分隔线
-        draw.line([30, y, img_width - 30, y], fill=border_color, width=2)
-        y += 25
-        
-        # 绘制作者和时间
-        draw.text((30, y), f" 作者: {author_name}", 
-                fill=info_color, font=font_info)            
-        y += 25
-        draw.text((30, y), f" 时间: {create_time}", 
-                fill=info_color, font=font_info)
-        y += 35
-        
-        # 分割线
-        draw.line([30, y, img_width - 30, y], fill=border_color, width=1)
-        y += 25
-        
-        # 绘制内容标签
-        draw.text((30, y), "【内容】:", fill=text_color, font=font_text)
-        y += 30
-        
-        # 绘制内容（确保不超出可编辑区域）
-        line_count = 0  # 行计数器
-        for line in content_lines:
-            if y + 28 > editable_height:  # 超出可编辑区域，停止绘制
-                break
-            if line:
-                # ⭐ 新增：检查行宽度，超长则截断
-                bbox = draw.textbbox((0, 0), line, font=font_text)
-                line_width = bbox[2] - bbox[0]
-                
-                if line_width > max_content_width:
-                    # 强制截断到最大宽度
-                    truncated_line = ""
-                    for char in line:
-                        test_line = truncated_line + char
-                        test_bbox = draw.textbbox((0, 0), test_line, font=font_text)
-                        if test_bbox[2] - test_bbox[0] > max_content_width:
-                            break
-                        truncated_line = test_line
-                    line = truncated_line
-                draw.text((40, y), line, fill=text_color, font=font_text)
-                y += 28
-                line_count += 1
-                
-                # 第6行插入干扰文字
-                if line_count == 6:
-                    y += 15
-                    noise_text = "请务必添加原作者微信：MK0914666，私自转发很快会被技术手段清除！"
-                    draw.text((40, y), noise_text, fill=noise_color, font=font_noise)
-                    y += 35
-
-        
-        # 不绘制底部信息（由模板提供）
-        return image
-    
-    def _create_images_pages(self, image_paths: List[str], background_image_path: str = None) -> List[Image.Image]:
-        """
-        创建图片页面列表（A4尺寸，每行1张图片，保持原始比例，支持多页）
-        
-        Args:
-            image_paths: 图片路径列表
-            
-        Returns:
-            PIL Image对象列表（每个元素是一页）
-        """
-         # A4尺寸 (像素)
-        page_width = 794
-        page_height = 1123
-        footer_reserved = 120  # 底部预留高度
-        page_padding = 30
-        title_height = 80
-        
-         # 图片最大宽度（不超过A4宽度）
-        max_img_width = page_width - page_padding * 2
-        # 图片最大高度（可编辑区域 - 标题区域）
-        max_img_height = page_height - footer_reserved - title_height - page_padding * 2
-        
-        # 尝试加载字体
-        try:
-            if platform.system() == "Windows":
-                font_title = ImageFont.truetype("C:\\Windows\\Fonts\\simhei.ttf", 24)
-            else:
-                font_title = ImageFont.truetype("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", 24)
-        except:
-            font_title = ImageFont.load_default()
-        
-        pages = []
-        total_images = len(image_paths)
-        
-        for i, img_path in enumerate(image_paths):
-            try:
-                img = Image.open(img_path)
-                img_w, img_h = img.size
-                
-                # 计算缩放比例，适应A4宽度（保持原始宽高比）
-                ratio_w = max_img_width / img_w
-                ratio_h = max_img_height / img_h
-                ratio = min(ratio_w, ratio_h)
-                
-                # 如果图片比可用区域小，不放大
-                if ratio > 1:
-                    ratio = 1
-                
-                new_w = int(img_w * ratio)
-                new_h = int(img_h * ratio)
-                
-                img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                
-                # 创建A4尺寸页面（使用背景图片）
-                if background_image_path and os.path.exists(background_image_path):
-                    page = Image.open(background_image_path)
-                    page = page.resize((page_width, page_height), Image.Resampling.LANCZOS)
-                    if page.mode != 'RGB':
-                        page = page.convert('RGB')
-                else:
-                    # 兜底：白色背景
-                    page = Image.new('RGB', (page_width, page_height), (255, 255, 255))
-                draw = ImageDraw.Draw(page)
-                
-                # 绘制标题
-                title_text = f"附件图片 ({i+1}/{total_images})"
-                draw.text((page_padding, page_padding), title_text, fill=(0, 0, 0), font=font_title)
-                
-                # 绘制分隔线
-                y = page_padding + 40
-                draw.line([page_padding, y, page_width - page_padding, y], fill=(200, 200, 200), width=1)
-                y += 20
-                
-                 # 图片水平居中，紧跟分隔线下方
-                x = (page_width - new_w) // 2
-                paste_y = y + 5 # 横线下方留25px间距，不垂直居中
-                
-                # 粘贴图片
-                page.paste(img_resized, (x, paste_y))
-                
-                pages.append(page)
-                self.log(f"   ✅ 图片{i+1}处理成功 (原始:{img_w}x{img_h} -> 缩放:{new_w}x{new_h})")
-                
-            except Exception as e:
-                self.log(f"   ❌ 图片{i+1}处理失败: {e}")
-        
-        if not pages:
-            return [Image.new('RGB', (page_width, page_height), (255, 255, 255))]
-        
-        self.log(f"   📄 生成 {len(pages)} 页图片PDF")
-        return pages
 
     def _handle_images(self, index: int, image_urls: List[str], title: str, 
                    crawler, total: int) -> bool:
@@ -1677,4 +1508,394 @@ class WeComWebhook:
         except Exception as e:
             self.log(f"   ❌ 图片发送异常: {e}")
             return False
+        
+    def _create_images_pdf_with_mupdf(self, image_paths: List[str], output_path: str,
+                                   background_image_path: str = None) -> bool:
+        """使用 PyMuPDF 创建图片PDF"""
+        try:
+            doc = fitz.open()
+            
+            page_width = 794
+            page_height = 1123
+            page_padding = 40
+            title_height = 80
+            
+            font_path = r"C:\Windows\Fonts\simhei.ttf"
+            font_name = "simhei"
+            
+            total_images = len(image_paths)
+            
+            for i, img_path in enumerate(image_paths):
+                page = doc.new_page(width=page_width, height=page_height)
+                
+                # 插入背景图片（如有）
+                if background_image_path and os.path.exists(background_image_path):
+                    bg_rect = fitz.Rect(0, 0, page_width, page_height)
+                    page.insert_image(bg_rect, filename=background_image_path)
+                
+                # 绘制标题
+                title_text = f"附件图片 ({i+1}/{total_images})"
+                page.insert_text(
+                    fitz.Point(page_padding, 50),
+                    title_text,
+                    fontfile=font_path,
+                    fontname=font_name,
+                    fontsize=20,
+                    color=(0, 0, 0)
+                )
+                
+                # 绘制分隔线
+                page.draw_line(
+                    fitz.Point(page_padding, 70),
+                    fitz.Point(page_width - page_padding, 70),
+                    color=(0.78, 0.78, 0.78),
+                    width=1
+                )
+                
+                # 获取图片实际尺寸
+                img_doc = fitz.open(img_path)
+                img_page = img_doc[0]
+                img_w = img_page.rect.width
+                img_h = img_page.rect.height
+                img_doc.close()
+                
+                # 最大可用区域（调整边距）
+                max_width = page_width - page_padding * 2
+                max_height = page_height - title_height - page_padding * 2
+                
+                # 计算缩放比例
+                ratio_w = max_width / img_w
+                ratio_h = max_height / img_h
+                ratio = min(ratio_w, ratio_h, 1)
+                
+                new_w = img_w * ratio
+                new_h = img_h * ratio
+                
+                # 计算居中位置
+                x = (page_width - new_w) / 2
+                y = title_height + page_padding
+                
+                # 插入图片
+                img_rect = fitz.Rect(x, y, x + new_w, y + new_h)
+                page.insert_image(img_rect, filename=img_path)
+                
+                self.log(f"   ✅ 图片{i+1}处理成功 ({img_w:.0f}x{img_h:.0f} -> {new_w:.0f}x{new_h:.0f})")
+            
+            # 保存（压缩）
+            doc.save(output_path, deflate=True, garbage=3)
+            doc.close()
+            
+            self.log(f"   📄 生成 {total_images} 页图片PDF")
+            return True
+            
+        except Exception as e:
+            self.log(f"   ❌ 图片PDF生成失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+            
+    def _create_pdf_with_pil(self, title: str, content: str, author_name: str,
+                            create_time: str, image_paths: List[str],
+                            output_dir: str, group_id: str = None) -> Optional[str]:
+        """
+        使用 PIL 渲染文本到背景图，生成带干扰功能的 PDF
+        
+        Args:
+            title: 标题
+            content: 内容
+            author_name: 作者名
+            create_time: 创建时间
+            image_paths: 图片路径列表
+            output_dir: 输出目录
+            group_id: 群组ID（用于判断是否启用干扰）
+            
+        Returns:
+            PDF文件路径，失败返回None
+        """
+        try:
+            # ============ 路径配置 ============
+            bg_path = os.path.join(os.path.dirname(__file__), "images", "pdf_background.png")
+            temp_dir = os.path.join(os.path.dirname(__file__), "temp_pdf_pages")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # ============ 页面参数 ============
+            img_width = 794
+            img_height = 1123
+            footer_reserved = 140
+            editable_height = img_height - footer_reserved
+            
+            # ============ 字体配置 ============
+            default_font_path = r"C:\Windows\Fonts\msyh.ttc"
+            
+            # 干扰字体列表
+            noise_fonts = [
+                r"C:\Windows\Fonts\miaobihuiyinti_0.ttf",
+                r"C:\Windows\Fonts\miaobishuobingti.ttf",
+            ]
+            
+            try:
+                font_title = ImageFont.truetype(default_font_path, 32)
+                font_text = ImageFont.truetype(default_font_path, 22)
+                font_info = ImageFont.truetype(default_font_path, 16)
+                font_noise_text = ImageFont.truetype(default_font_path, 16)  # 干扰文字小字号
+            except Exception as e:
+                self.log(f"   ❌ 字体加载失败: {e}")
+                return None
+
+            # 选择干扰字体（只用于随机更换字体）
+            selected_noise_font = random.choice(noise_fonts)
+            try:
+                font_noise = ImageFont.truetype(selected_noise_font, 22)
+            except Exception as e:
+                self.log(f"   ⚠️ 干扰字体加载失败: {e}")
+                font_noise = font_text
+            
+            # ============ 判断是否启用干扰功能 ============
+            enable_noise = group_id in self.NOISE_GROUPS if group_id else False
+            
+            # ============ 干扰文字内容 ============
+            noise_text = "（原作者微信：MK0914666）"
+            
+            # ============ 处理内容 ============
+            if enable_noise:
+                marked_content = self._process_content_with_noise(content, noise_text, min_noise_chars=100)
+                self.log(f"   🔧 已启用干扰功能（群组: {group_id}）")
+            else:
+                # 不启用干扰，全部使用正常字体（类型0）
+                marked_content = [(char, 0) for char in content]
+            
+            # ============ 加载背景图片 ============
+            def load_background():
+                if os.path.exists(bg_path):
+                    img = Image.open(bg_path)
+                    img = img.resize((img_width, img_height), Image.Resampling.LANCZOS)
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    return img
+                return Image.new('RGB', (img_width, img_height), (255, 255, 255))
+            
+            # ============ 自动换行处理 ============
+            max_content_width = img_width - 80
+            
+            temp_img = Image.new('RGB', (1, 1))
+            temp_draw = ImageDraw.Draw(temp_img)
+            
+            content_lines = []
+            current_line = []
+            current_width = 0
+            
+            for char, font_type in marked_content:
+                if char == '\n':
+                    if current_line:
+                        content_lines.append(current_line)
+                        content_lines.append([])  # 只在段落结束后添加一个空行
+                    current_line = []
+                    current_width = 0
+                    continue
+                
+                font = font_noise if font_type == 1 else (font_noise_text if font_type == 2 else font_text)
+                bbox = temp_draw.textbbox((0, 0), char, font=font)
+                char_width = bbox[2] - bbox[0]
+                
+                if current_width + char_width <= max_content_width:
+                    current_line.append((char, font_type))
+                    current_width += char_width
+                else:
+                    if current_line:
+                        content_lines.append(current_line)
+                    current_line = [(char, font_type)]
+                    current_width = char_width
+            
+            if current_line:
+                content_lines.append(current_line)
+            
+            # ============ 创建页面辅助函数 ============
+            def create_new_page(is_first_page):
+                page = load_background()
+                draw = ImageDraw.Draw(page)
+                y = 40
+                
+                if is_first_page:
+                    draw.rectangle([30, y, img_width - 30, y + 3], fill=(200, 200, 200))
+                    y += 20
+                    
+                    bbox = draw.textbbox((0, 0), "新内容推送", font=font_title)
+                    title_w = bbox[2] - bbox[0]
+                    draw.text(((img_width - title_w) // 2, y), "新内容推送", fill=(0, 0, 0), font=font_title)
+                    y += 50
+                    
+                    draw.line([30, y, img_width - 30, y], fill=(200, 200, 200), width=2)
+                    y += 25
+                    
+                    draw.text((30, y), f" 作者: {author_name}", fill=(100, 100, 100), font=font_info)
+                    y += 25
+                    draw.text((30, y), f" 时间: {create_time}", fill=(100, 100, 100), font=font_info)
+                    y += 35
+                    
+                    draw.line([30, y, img_width - 30, y], fill=(200, 200, 200), width=1)
+                    y += 25
+                    
+                    draw.text((30, y), "【内容】:", fill=(70, 70, 70), font=font_text)
+                    y += 30
+                else:
+                    draw.text((30, y), "新内容推送 (续)", fill=(70, 70, 70), font=font_info)
+                    y += 25
+                    draw.line([30, y, img_width - 30, y], fill=(200, 200, 200), width=1)
+                    y += 20
+                
+                return page, draw, y
+            
+            # ============ 多页渲染（带行间干扰文字） ============
+            pages = []
+            current_page, current_draw, y = create_new_page(is_first_page=True)
+            pages.append(current_page)
+            
+            text_color = (70, 70, 70)
+            noise_color = (50, 100, 200)  # 蓝色
+            
+            for line_chars in content_lines:
+                if y + 28 > editable_height:
+                    current_page, current_draw, y = create_new_page(is_first_page=False)
+                    pages.append(current_page)
+                
+                # 渲染正文行
+                x = 40
+                for char, font_type in line_chars:
+                    if font_type == 0:
+                        font = font_text
+                        color = text_color
+                    elif font_type == 1:
+                        font = font_noise
+                        color = text_color
+                    else:  # font_type == 2
+                        font = font_noise_text
+                        color = noise_color
+                    
+                    current_draw.text((x, y), char, fill=color, font=font)
+                    bbox = current_draw.textbbox((x, y), char, font=font)
+                    x = bbox[2]
+                
+                y += 28
+            
+            # ============ 保存临时图片 ============
+            timestamp = int(time.time() * 1000)
+            temp_images = []
+            for i, page in enumerate(pages):
+                temp_path = os.path.join(temp_dir, f"page_{timestamp}_{i}.png")
+                page.save(temp_path)
+                temp_images.append(temp_path)
+            
+            # ============ 图片转PDF ============
+            doc = fitz.open()
+            
+            for img_path in temp_images:
+                page = doc.new_page(width=img_width, height=img_height)
+                rect = fitz.Rect(0, 0, img_width, img_height)
+                page.insert_image(rect, filename=img_path)
+            
+            temp_pdf = os.path.join(temp_dir, f"temp_{timestamp}.pdf")
+            doc.save(temp_pdf)
+            doc.close()
+            
+            # ============ 处理图片（如有） ============
+            if image_paths:
+                doc = fitz.open(temp_pdf)
+                for img_path in image_paths:
+                    page = doc.new_page(width=img_width, height=img_height)
+                    rect = fitz.Rect(30, 30, img_width - 30, img_height - 30)
+                    page.insert_image(rect, filename=img_path)
+                
+                doc.save(temp_pdf)
+                doc.close()
+            
+            # ============ 加密PDF ============
+            encrypted_pdf = os.path.join(temp_dir, f"encrypted_{timestamp}.pdf")
+            
+            doc = fitz.open(temp_pdf)
+            owner_password = "protect_pdf@Arron"
+            perm = 0
+            
+            doc.save(
+                encrypted_pdf,
+                encryption=fitz.PDF_ENCRYPT_AES_256,
+                owner_pw=owner_password,
+                user_pw="",
+                permissions=perm
+            )
+            doc.close()
+            
+            # ============ 移动到最终位置 ============
+            safe_author = re.sub(r'[^\w\u4e00-\u9fff]', '', author_name)
+            time_str = time.strftime("%Y%m%d_%H%M%S")
+            pdf_filename = f"{safe_author}_新内容推送_{time_str}_作者微信MK0914666.pdf"
+            output_path = os.path.join(output_dir, pdf_filename)
+            
+            shutil.move(encrypted_pdf, output_path)
+            
+            # 清理临时文件
+            for temp_path in temp_images:
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+            try:
+                os.remove(temp_pdf)
+            except:
+                pass
+            
+            file_size = os.path.getsize(output_path) / 1024
+            self.log(f"   ✅ PDF生成成功: {pdf_filename} ({len(pages)}页, {file_size:.1f}KB)")
+            return output_path
+            
+        except Exception as e:
+            self.log(f"   ❌ PDF生成失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _process_content_with_noise(self, content: str, noise_text: str, min_noise_chars: int = 100):
+        """
+        处理内容：先随机选择字体更换位置，再插入干扰文字
+        
+        Args:
+            content: 原始内容
+            noise_text: 干扰文字
+            min_noise_chars: 最少更换字体的字符数
+            
+        Returns:
+            [(char, font_type), ...] 列表
+            font_type: 0=正常, 1=干扰字体, 2=干扰文字
+        """
+        chars = list(content)
+        total_len = len(chars)
+        
+        # 步骤1：先随机选择要更换字体的位置
+        normal_indices = [i for i, char in enumerate(chars) if char != '\n']
+        
+        selected_indices = set()
+        if len(normal_indices) > min_noise_chars:
+            noise_char_count = random.randint(min_noise_chars, min(min_noise_chars + 30, len(normal_indices)))
+            selected_indices = set(random.sample(normal_indices, noise_char_count))
+        
+        marked_content = []
+        for i, char in enumerate(chars):
+            font_type = 1 if i in selected_indices else 0
+            marked_content.append((char, font_type))
+        
+        # 步骤2：插入干扰文字（固定3次，随机位置）
+        insert_times = 3
+        
+        insert_positions = []
+        if total_len > 100:
+            available_positions = list(range(30, total_len - 30))
+            insert_positions = sorted(random.sample(available_positions, insert_times), reverse=True)
+        
+        for pos in insert_positions:
+            noise_chars = [(char, 2) for char in noise_text]  # 类型2=干扰文字
+            marked_content[pos:pos] = noise_chars
+        
+        self.log(f"   🎲 随机更换字体: {len(selected_indices)} 个字，插入干扰文字: {len(insert_positions)} 次")
+        
+        return marked_content
+
     
