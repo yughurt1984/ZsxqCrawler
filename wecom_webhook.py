@@ -1777,13 +1777,25 @@ class WeComWebhook:
                 
                 y += 28
             
-            # ============ 保存临时图片 ============
-            timestamp = int(time.time() * 1000)
-            temp_images = []
-            for i, page in enumerate(pages):
-                temp_path = os.path.join(temp_dir, f"page_{timestamp}_{i}.png")
-                page.save(temp_path)
-                temp_images.append(temp_path)
+            # ============ 处理图片（多张图片保存错误） ============
+            if image_paths:
+                doc = fitz.open(temp_pdf)
+                for img_path in image_paths:
+                    page = doc.new_page(width=img_width, height=img_height)
+                    rect = fitz.Rect(30, 30, img_width - 30, img_height - 30)
+                    page.insert_image(rect, filename=img_path)
+                
+                # 保存到不同的文件名（避免 save to original 错误）
+                temp_pdf_with_images = os.path.join(temp_dir, f"temp_with_images_{timestamp}.pdf")
+                doc.save(temp_pdf_with_images)
+                doc.close()
+                
+                # 删除原临时文件，使用新文件
+                try:
+                    os.remove(temp_pdf)
+                except:
+                    pass
+                temp_pdf = temp_pdf_with_images
             
             # ============ 图片转PDF ============
             doc = fitz.open()
