@@ -41,8 +41,8 @@ except ImportError:
 class ZSXQInteractiveCrawler:
     """知识星球交互式数据采集器"""
     def __init__(self, cookie: str, group_id: str, db_path: str = None, 
-             log_callback=None, wecom_webhook_url: str = None, 
-             wecom_enabled: bool = True, pdf_config: dict = None):
+                log_callback=None, wecom_webhook_url: str = None, 
+                wecom_enabled: bool = True, pdf_config: dict = None, config: dict = None):
         self.cookie = self.clean_cookie(cookie)
         self.group_id = group_id
         self.log_callback = log_callback  # 日志回调函数
@@ -66,7 +66,7 @@ class ZSXQInteractiveCrawler:
         if wecom_webhook_url:
             try:
                 from wecom_webhook import WeComWebhook
-                self.wecom_webhook = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled, log_callback=self.log)
+                self.wecom_webhook = WeComWebhook(wecom_webhook_url, enabled=wecom_enabled, log_callback=self.log, config=config)
                 self.log("📱 企业微信Webhook已启用")
             except ImportError:
                 self.log("⚠️ 未找到wecom_webhook模块，webhook推送功能不可用")
@@ -1103,7 +1103,7 @@ class ZSXQInteractiveCrawler:
             # 企业微信推送
             if self.wecom_webhook and new_topics:  # ✅ 使用new_topics列表判断
                 self.log(f"📱 准备推送企业微信通知，共{len(new_topics)}个新话题...")
-                success = self.wecom_webhook.send_new_topics_notification(new_topics, stats, crawler=self)
+                success = self.wecom_webhook.process_topics(new_topics, stats, crawler=self)
                 if success:
                     self.log("✅ 企业微信推送成功")
                 else:
@@ -1733,7 +1733,7 @@ class ZSXQInteractiveCrawler:
                                         enhanced_new_topics.append(topic)
                                         self.log(f"   ⚠️ 话题{topic_id}查询详情失败，使用原始数据")
                             
-                            success = self.wecom_webhook.send_new_topics_notification(all_new_topics, total_stats, crawler=self)
+                            success = self.wecom_webhook.process_topics(all_new_topics, total_stats, crawler=self)
                             if success:
                                 self.log("✅ 企业微信推送成功")
                             else:

@@ -928,11 +928,10 @@ def run_crawl_historical_task(task_id: str, group_id: str, pages: int, per_page:
         # 使用传入的group_id而不是配置文件中的固定值
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
-
-        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        config = load_config()
+        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=config)
         # 设置停止检查函数
         crawler.stop_check_func = stop_check
-
         # 设置自定义间隔参数
         if crawl_settings:
             crawler.set_custom_intervals(
@@ -1551,7 +1550,7 @@ async def start_scheduled_crawl(group_id: str, request: ScheduledCrawlRequest, b
                         wecom_enabled = wecom_config.get('enabled', True)
                 
                 # 创建爬虫实例
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback,wecom_webhook_url=wecom_webhook_url, wecom_enabled=wecom_enabled)
+                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, wecom_webhook_url=wecom_webhook_url, wecom_enabled=wecom_enabled, config=config)
                 crawler.stop_check_func = stop_check
                 
                 # 设置爬取间隔参数
@@ -1672,7 +1671,8 @@ async def crawl_all(group_id: str, request: CrawlSettingsRequest, background_tas
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                config = load_config()
+                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=config)
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -1756,7 +1756,9 @@ async def crawl_incremental(group_id: str, request: CrawlHistoricalRequest, back
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                config = load_config()
+                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=config)
+
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -1838,7 +1840,8 @@ async def crawl_latest_until_complete(group_id: str, request: CrawlSettingsReque
                     db_path, 
                     log_callback,
                     wecom_webhook_url=wecom_webhook_url,
-                    wecom_enabled=wecom_enabled
+                    wecom_enabled=wecom_enabled,
+                    config=config
                 )
         
                 # 设置停止检查函数

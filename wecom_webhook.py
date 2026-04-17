@@ -6,11 +6,12 @@ import requests
 import json
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from html.parser import HTMLParser
 from db_path_manager import get_db_path_manager
 from zsxq_interactive_crawler import load_config
 
+from image_cache_manager import get_image_cache_manager #处理图片
 from xhtml2pdf import pisa
 from io import BytesIO
 from urllib.parse import urlparse
@@ -37,89 +38,115 @@ class HTMLTagRemover(HTMLParser):
     def get_text(self):
         return ''.join(self.result)
 
-
-def clean_html_tags(text: str) -> str:
-    """
-    清理HTML标签，返回纯文本
-    
-    Args:
-        text: 包含HTML标签的文本
+    @staticmethod
+    def clean_html_tags(text: str) -> str:
+        """
+        清理HTML标签，返回纯文本
         
-    Returns:
-        清理后的纯文本
-    """
-    if not text:
-        return ""
-    
-    # 方法1: 使用HTMLParser清理
-    try:
-        parser = HTMLTagRemover()
-        parser.feed(text)
-        text = parser.get_text()
-    except:
-        # 如果HTMLParser失败，使用正则表达式
-        pass
-    
-    # 方法2: 使用正则表达式清理剩余的HTML标签
-    # 匹配所有HTML标签: <tag> 或 <tag />
-    text = re.sub(r'<[^>]+>', '', text)
-    
-    # 清理HTML实体（如 &nbsp; 等）
-    html_entities = {
-        '&nbsp;': ' ',
-        '&lt;': '<',
-        '&gt;': '>',
-        '&amp;': '&',
-        '&quot;': '"',
-        '&apos;': "'"
-    }
-    for entity, char in html_entities.items():
-        text = text.replace(entity, char)
-    
-    # 清理URL编码的字符（如 %EF%BC%8C）
-    try:
-        # 解析URL编码
-        from urllib.parse import unquote
-        text = unquote(text)
-    except:
-        pass
-    
-    # 清理多余的空白字符
-    text = re.sub(r' +', ' ', text)
-    text = text.strip()
-    
-    return text
+        Args:
+            text: 包含HTML标签的文本
+            
+        Returns:
+            清理后的纯文本
+        """
+        if not text:
+            return ""
+        
+        # 方法1: 使用HTMLParser清理
+        try:
+            parser = HTMLTagRemover()
+            parser.feed(text)
+            text = parser.get_text()
+        except:
+            # 如果HTMLParser失败，使用正则表达式
+            pass
+        
+        # 方法2: 使用正则表达式清理剩余的HTML标签
+        # 匹配所有HTML标签: <tag> 或 <tag />
+        text = re.sub(r'<[^>]+>', '', text)
+        
+        # 清理HTML实体（如 &nbsp; 等）
+        html_entities = {
+            '&nbsp;': ' ',
+            '&lt;': '<',
+            '&gt;': '>',
+            '&amp;': '&',
+            '&quot;': '"',
+            '&apos;': "'"
+        }
+        for entity, char in html_entities.items():
+            text = text.replace(entity, char)
+        
+        # 清理URL编码的字符（如 %EF%BC%8C）
+        try:
+            # 解析URL编码
+            from urllib.parse import unquote
+            text = unquote(text)
+        except:
+            pass
+        
+        # 清理多余的空白字符
+        text = re.sub(r' +', ' ', text)
+        text = text.strip()
+        
+        return text
 
 
 class WeComWebhook:
     """企业微信机器人Webhook推送类"""
-    
-    # ========== 干扰功能配置 ==========
-        # 需要启用干扰功能的群组ID列表（在此配置）
-    NOISE_GROUPS = [
-        # "your_group_id_1",  # 示例：替换为实际群组ID
-        # "your_group_id_2",
-        "28858542222551"
-    ]
         
-    def __init__(self, webhook_url: str, enabled: bool = True, log_callback=None):
+    def __init__(self, webhook_url: str, enabled: bool = True, log_callback=None, config: dict = None):
         """
         初始化企业微信Webhook
-        
-        Args:
-            webhook_url: 企业微信机器人webhook地址
-            enabled: 是否启用推送
         """
         self.webhook_url = webhook_url
         self.enabled = enabled
         self.session = requests.Session()
-        self.log_callback = log_callback  # ✅ 添加日志回调
+        self.log_callback = log_callback
+        self.config = config or {}
+        
+        # 频率限制相关 - 随机范围
+        webhook_config = self.config.get('wecom_webhook', {})
+        self.rate_limit_min = webhook_config.get('rate_limit_min', 30)
+        self.rate_limit_max = webhook_config.get('rate_limit_max', 60)
+        self.last_operation_time = 0
+        
+        # 图片缓存目录
+        self.image_cache_dir = webhook_config.get('image_cache_dir', 'images')
     
     def log(self, message: str):
         """统一的日志输出方法"""
         if self.log_callback:
             self.log_callback(message)  # 推送到前端
-    
+
+    def _rate_limit_wait(self, operation_name: str = "操作"):
+        """频率限制：随机等待 30-60 秒"""
+        current_time = time.time()
+        elapsed = current_time - self.last_operation_time
+        
+        # 随机等待时间
+        wait_time_random = random.randint(self.rate_limit_min, self.rate_limit_max)
+        
+        if elapsed < wait_time_random:
+            wait_time = wait_time_random - elapsed
+            self.log(f"⏳ {operation_name}频率限制，等待 {wait_time:.0f} 秒...")
+            time.sleep(wait_time)
+        
+        self.last_operation_time = time.time()
+
+    def is_group_enabled(self, group_id: str) -> bool:
+        """检查群组是否启用 webhook"""
+        webhook_config = self.config.get('wecom_webhook', {})
+        groups_config = webhook_config.get('groups', {})
+        
+        if group_id in groups_config:
+            return groups_config[group_id].get('enabled', False)
+        
+        # 如果群组未配置，默认不启用
+        return False
+
+    # 推送相关函数
+
     def send_text(self, content: str, mentioned_list: Optional[List[str]] = None) -> bool:
         """
         发送文本消息
@@ -304,227 +331,353 @@ class WeComWebhook:
             self.log(f"❌ 企业微信文件发送异常: {e}")
             return False
     
-    def send_new_topics_notification(self, new_topics: List[Dict], stats: Dict, crawler=None) -> bool:
+    def process_topics(self, topics: List[Dict], stats: Dict = None, crawler=None) -> bool:
         """
-        发送新话题推送通知
+        处理话题（只推送纯文字内容）
         
-        Args:
-            new_topics: 新话题列表
-            stats: 统计信息
-            crawler: 爬虫实例必需
-        Returns:
-            是否发送成功
+        处理逻辑：
+        A. inline_article_url -> 爬取文章 -> PDF -> 水印 -> 加密 -> 改名 -> 下载本地（不推送）
+        B. 有附件 -> 下载 -> 水印(如果是PDF) -> 加密 -> 下载本地（不推送）
+        C. 有图片 -> 缓存缩略图和高清图 -> 下载本地（不推送）
+        D. 纯文字 -> 前20字 + 访问链接 -> 推送文字消息
         """
-        if not self.enabled or not new_topics:
+        # 1. 检查群组是否启用
+        group_id = crawler.group_id if crawler else None
+        if not self.is_group_enabled(group_id):
+            self.log(f"⚠️ 群组 {group_id} 未启用，跳过处理")
             return False
         
-        # ✅ 限制最多推送10个话题-改为不限制话题数量
-        topics_to_send = new_topics
+        if not topics:
+            return False
+        
         success_count = 0
         
-        # 添加前10个新话题的预览，为每个话题单独推送
-        for i, topic in enumerate(topics_to_send, 1):
+        for i, topic in enumerate(topics, 1):
             try:
-                title = topic.get('title', '无标题')
                 talk = topic.get('talk', {})
-
-                # 获取内容（处理问答类型）
-                question = topic.get('question', {})
-                answer = topic.get('answer', {})
-
-                question_image_urls = []  # 初始化
-
-                # 判断是否是问答类型
-                if question or answer:
-                    # 问答类型：组合问题和回答
-                    content_parts = []
-                    
-                    # 获取提问者信息
-                    question_owner = question.get('owner', {})
-                    question_name = question_owner.get('name', '匿名')
-                    if question.get('anonymous', False):
-                        question_name = '匿名用户'
-                    
-                    # 添加问题
-                    question_text = question.get('text', '')
-                    if question_text:
-                        content_parts.append(f"【提问】{question_name}：\n{question_text}")
-                    
-                    # 获取回答者信息
-                    answer_owner = answer.get('owner', {})
-                    answer_name = answer_owner.get('name', '未知')
-                    
-                    # 添加回答
-                    answer_text = answer.get('text', '')
-                    if answer_text:
-                        content_parts.append(f"【回答】{answer_name}：\n{answer_text}")
-                    
-                    content = '\n\n'.join(content_parts) if content_parts else '无内容'
-                    
-                    # 🆕 提取提问的图片URL
-                    question_images = question.get('images', [])
-                    for img in question_images:
-                        url = img.get('large', {}).get('url') or img.get('thumbnail', {}).get('url')
-                        if url:
-                            question_image_urls.append(url)
-
-                else:
-                    # 普通话题：从talk获取内容
-                    content = talk.get('text', '无内容')
+                content = talk.get('text', '')
                 
-                # 🆕 统一提取内容图片（包括talk和question）
-                all_content_images = []
-                
-                # 从talk提取图片
-                talk_images = self._extract_images(talk)
-                all_content_images.extend(talk_images)
-                
-                # 🆕 同时从topic顶层提取图片（数据库增强数据格式）
-                if not talk_images and 'images' in topic:
-                    topic_images = topic.get('images', [])
-                    for img in topic_images:
-                        if isinstance(img, dict):
-                            img_url = (img.get('original', {}).get('url') or
-                                       img.get('large', {}).get('url') or
-                                       img.get('thumbnail', {}).get('url'))
-                            if img_url:
-                                all_content_images.append(img_url)
-                
-                # 从question提取图片（问答类型）
-                all_content_images.extend(question_image_urls)
-
-
-                create_time = topic.get('create_time', '未知时间')
-                
-                # 作者信息：问答类型显示回答者，普通话题显示发布者
-                if question or answer:
-                    # 问答类型：优先显示回答者
-                    if answer and answer.get('owner'):
-                        author_name = answer.get('owner', {}).get('name', '未知')
-                    elif question and question.get('owner') and not question.get('anonymous', False):
-                        author_name = question.get('owner', {}).get('name', '匿名用户')
-                    else:
-                        author_name = '匿名用户'
-                else:
-                    # 普通话题：从talk获取
-                    owner = talk.get('owner', {})
-                    author_name = owner.get('name', '六便士')
-
-                
-                # 提取文章链接
+                # 提取元素
                 article_url = self._extract_article_url(talk, topic)
-                
-                # 提取附件列表
                 topic_files = talk.get('files', [])
-                '''
-                分支1: 有zsxq链接 → _handle_article_pdf() → convert_url_to_pdf()
-                分支2: 有附件 → _handle_attachments()
-                分支3: 有图片 → convert_text_and_images_to_pdf() → _create_text_page()
-                分支4: 纯文本 → convert_text_to_pdf() → _create_text_page()
-                '''
-                # ========== 2. 分支1: 有zsxq链接 → 只推送链接内容 ==========
+                
+                # ========== 分支A: inline_article_url ==========
                 if article_url and 'zsxq' in article_url and crawler:
-                    topic_id = topic.get('topic_id')
-                    if self._handle_article_pdf(i, article_url, title, crawler, len(new_topics), topic_id, topic_files):
+                    self._rate_limit_wait("文章爬取")
+                    self.log(f"📄 第{i}/{len(topics)}条：检测到文章链接")
+                    
+                    # 处理文章链接
+                    if self.handle_article_pdf(article_url, topic, crawler):
                         success_count += 1
-                    continue  # 已处理，跳过后续分支
-
-                
-                # ========== 2. 分支2: 有附件 → 推送附件（含图片则一并推送） ==========
-                if topic_files and crawler:
-                    # 先下载附件
-                    attachment_success = self._handle_attachments(i, topic_files, title, crawler, len(new_topics))
                     
-                    # 如果同时有图片，也推送图片
-                    if all_content_images:
-                        self.log(f"   🖼️ 附件推送完成，继续处理{len(all_content_images)}张图片...")
-                        pdf_output_dir = self._get_pdf_output_dir(crawler)
-                        
-                        # 下载图片
-                        image_paths = []
-                        for idx, img_url in enumerate(all_content_images, 1):
-                            img_path = self._download_image(img_url, pdf_output_dir, idx)
-                            if img_path:
-                                image_paths.append(img_path)
-                        
-                        if image_paths:
-                            # 创建图片PDF（使用 PyMuPDF）
-                            timestamp = int(time.time() * 1000)
-                            images_pdf = os.path.join(pdf_output_dir, f"images_{i}_{timestamp}.pdf")
-                            if self._create_images_pdf_with_mupdf(image_paths, images_pdf):
-                                if self.send_file(images_pdf):
-                                    self.log(f"   ✅ 图片PDF推送成功")
-                                else:
-                                    self.log(f"   ⚠️ 图片PDF推送失败")
-                            else:
-                                self.log(f"   ❌ 图片PDF生成失败")
+                    # 如果同时有附件，继续处理
+                    if topic_files and crawler:
+                        self._rate_limit_wait("附件下载")
+                        self.log(f"   📎 继续处理附件...")
+                        self.handle_attachments(topic_files, crawler)
                     
-                    if attachment_success:
-                        success_count += 1
-                    continue  # 已处理，跳过后续分支
-                
-                # ========== 3. 分支3: 有图片 → 整合文本和图片到PDF ==========
-                # 注意：外部链接会当作文本出现在PDF中
-                if all_content_images and crawler:
-                    self.log(f"🖼️ 第{i}/{len(new_topics)}条：检测到{len(all_content_images)}张图片，合并为PDF...")
-                    
-                    pdf_output_dir = self._get_pdf_output_dir(crawler)
-                    
-                    pdf_path = self.convert_text_and_images_to_pdf(
-                        title=title,
-                        content=content,
-                        author_name=author_name,
-                        create_time=create_time,
-                        index=i,
-                        total=len(new_topics),
-                        image_urls=all_content_images,
-                        output_dir=pdf_output_dir,
-                        group_id=crawler.group_id  # 新增
-                    )
-                    
-                    if pdf_path:
-                        if self.send_file(pdf_path):
-                            self.log(f"✅ 第{i}/{len(new_topics)}条推送成功（PDF）")
-                            success_count += 1
-                        else:
-                            self.log(f"❌ 第{i}/{len(new_topics)}条推送失败")
-                    else:
-                        self.log(f"❌ 第{i}/{len(new_topics)}条PDF生成失败")
+                    # 如果同时有图片，继续缓存
+                    self.handle_images(talk, group_id)
                     
                     continue
                 
-                # ========== 4. 分支4: 纯文本推送 → 转PDF ==========
-                pdf_output_dir = self._get_pdf_output_dir(crawler)
-                pdf_path = self.convert_text_to_pdf(
-                    title=title,
-                    content=content,
-                    author_name=author_name,
-                    create_time=create_time,
-                    index=i,
-                    total=len(new_topics),
-                    output_dir=pdf_output_dir,
-                    group_id=crawler.group_id  # 新增
-
-                )
-                
-                if pdf_path:
-                    if self.send_file(pdf_path):
-                        self.log(f"✅ 第{i}/{len(new_topics)}条推送成功（PDF）")
+                # ========== 分支B: 有附件 ==========
+                if topic_files and crawler:
+                    self._rate_limit_wait("附件下载")
+                    self.log(f"📎 第{i}/{len(topics)}条：检测到附件（共{len(topic_files)}个）")
+                    
+                    # 处理附件
+                    if self.handle_attachments(topic_files, crawler):
                         success_count += 1
-                    else:
-                        self.log(f"❌ 第{i}/{len(new_topics)}条PDF已存在，跳过推送")
-                else:
-                    self.log(f"❌ 第{i}/{len(new_topics)}条PDF生成失败")
-            except Exception as e:
-                self.log(f"❌ 第{i}条推送异常: {e}")
-        # ✅ 添加推送总结日志
-        if success_count == len(topics_to_send):
-            self.log(f"📊 推送总结：{success_count}/{len(topics_to_send)}条全部成功")
-        else:
-            self.log(f"⚠️ 推送总结：{success_count}/{len(topics_to_send)}条成功")
-        
-        return success_count == len(topics_to_send)
+                    
+                    # 如果同时有图片，继续缓存
+                    self.handle_images(talk, group_id)
+                    
+                    continue
                 
+                # ========== 分支C: 有图片 ==========
+                cached, total = self.handle_images(talk, group_id)
+                if cached > 0:
+                    self.log(f"📷 第{i}/{len(topics)}条：检测到{total}张图片")
+                    success_count += 1
+                    continue
+                
+                # ========== 分支D: 纯文字内容 ==========
+                if content:
+                    self.log(f"📝 第{i}/{len(topics)}条：检测到纯文字内容")
+                    if self.handle_text_content(content, group_id):
+                        success_count += 1
+                    
+            except Exception as e:
+                self.log(f"❌ 第{i}条处理异常: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        self.log(f"📊 处理总结：{success_count}/{len(topics)}条成功")
+        return success_count > 0
+    
+
+    # 工具函数
+
+    def handle_text_content(self, content: str, group_id: str) -> bool:
+        """
+        处理文本内容并推送
+        
+        格式：前20字 + 访问链接 -> 推送文字消息
+        """
+        try:
+            # 清理HTML标签
+            content_clean = HTMLTagRemover.clean_html_tags(content)
+            
+            # 截取前30字
+            content_preview = content_clean[:30] if len(content_clean) > 30 else content_clean
+            
+            # 格式：前20字... + 详细内容链接
+            push_text = f"{content_preview}...\n\n详细内容：请访问：http://149.104.30.138:3080/groups/{group_id}"
+            
+            self.log(f"📝 处理文本内容...")
+            
+            # 使用现有的 send_text 方法推送
+            if self.send_text(push_text):
+                self.log(f"   ✅ 文字推送成功")
+                return True
+            else:
+                self.log(f"   ❌ 文字推送失败")
+                return False
+                
+        except Exception as e:
+            self.log(f"   ❌ 文本处理失败: {e}")
+            return False
+
+
+    def handle_attachments(self, topic_files: List[Dict], crawler) -> bool:
+        """
+        处理附件（不推送）
+        
+        流程：下载 -> 水印(如果是PDF) -> 加密 -> 保存本地
+        """
+        try:
+            self.log(f"📎 开始处理附件（共{len(topic_files)}个）")
+            
+            downloader = crawler.get_file_downloader()
+            processed_count = 0
+            
+            for idx, file_info in enumerate(topic_files, 1):
+                try:
+                    # 获取文件名
+                    file_name = file_info.get('name', 'Unknown')
+                    safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}' or '\u4e00' <= c <= '\u9fff')
+                    if not safe_filename:
+                        safe_filename = f"file_{file_info.get('id', 'unknown')}"
+                    
+                    # 源文件路径
+                    source_path = os.path.join(downloader.download_dir, safe_filename)
+                    
+                    # 下载文件（如果不存在）
+                    if not os.path.exists(source_path):
+                        file_data = {'file': file_info}
+                        result = downloader.download_file(file_data)
+                        if not result:
+                            self.log(f"   ❌ 文件下载失败: {file_name}")
+                            continue
+                    
+                    # 确认文件存在
+                    if not os.path.exists(source_path):
+                        self.log(f"   ❌ 文件不存在: {source_path}")
+                        continue
+                    
+                    # 处理PDF文件
+                    if source_path.lower().endswith('.pdf'):
+                        self.log(f"   🖼️ 处理PDF: {safe_filename}")
+                        
+                        # 创建临时文件
+                        temp_processed = source_path.replace('.pdf', '_temp.pdf')
+                        
+                        # 步骤1: 添加背景和水印
+                        if not self._add_background_and_noise_to_pdf(source_path, temp_processed, group_id=crawler.group_id):
+                            self.log(f"   ⚠️ 水印添加失败，使用源文件")
+                            temp_processed = source_path
+                        
+                        # 步骤2: 加密
+                        self._encrypt_pdf(temp_processed)
+                        
+                        # 步骤3: 用处理后的文件覆盖源文件
+                        shutil.move(temp_processed, source_path)
+                        
+                        self.log(f"   ✅ PDF处理完成: {safe_filename}")
+                        processed_count += 1
+                    else:
+                        # 非PDF文件，不处理
+                        self.log(f"   ✅ 文件已下载: {safe_filename}")
+                        processed_count += 1
+                    
+                    # 单个附件之间随机间隔（30-60秒）
+                    if idx < len(topic_files):
+                        self._rate_limit_wait("附件下载")
+                        
+                except Exception as e:
+                    self.log(f"   ❌ 附件处理异常: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            self.log(f"   ✅ 附件处理完成：{processed_count}/{len(topic_files)}个")
+            return processed_count > 0
+            
+        except Exception as e:
+            self.log(f"   ❌ 附件处理失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def handle_images(self, talk: Dict, group_id: str = None) -> Tuple[int, int]:
+        """
+        处理图片（不推送）
+        
+        流程：提取图片URL -> 缓存缩略图和高清图 -> 保存本地
+        """
+        from image_cache_manager import get_image_cache_manager
+        
+        # 提取图片URL
+        images = []
+        
+        # 方法1: 从talk.images字段提取
+        if 'images' in talk:
+            image_list = talk.get('images', [])
+            for img in image_list:
+                if isinstance(img, dict):
+                    img_url = (img.get('original', {}).get('url') or
+                            img.get('large', {}).get('url') or
+                            img.get('thumbnail', {}).get('url'))
+                    if img_url:
+                        images.append(img_url)
+                elif isinstance(img, str):
+                    images.append(img)
+        
+        # 方法2: 从talk.article.images字段提取
+        if 'article' in talk:
+            article = talk.get('article', {})
+            if 'images' in article:
+                article_images = article.get('images', [])
+                for img in article_images:
+                    if isinstance(img, dict):
+                        img_url = (img.get('original', {}).get('url') or
+                                img.get('large', {}).get('url') or
+                                img.get('thumbnail', {}).get('url'))
+                        if img_url:
+                            images.append(img_url)
+        
+        # 方法3: 从HTML内容中提取
+        if 'article' in talk:
+            article = talk.get('article', {})
+            article_content = article.get('article_content', '') or article.get('content', '')
+            if article_content:
+                import re
+                img_pattern = r'https?://[^\s<>"]+?(?:\.jpg|\.jpeg|\.png|\.gif|\.webp)'
+                found_urls = re.findall(img_pattern, article_content, re.IGNORECASE)
+                images.extend(found_urls)
+        
+        # 去重
+        images = list(dict.fromkeys(images))
+        
+        if not images:
+            return (0, 0)
+        
+        self.log(f"📷 开始处理图片（共{len(images)}张）")
+        
+        # 缓存图片
+        cache_manager = get_image_cache_manager(group_id)
+        cached_count = 0
+        
+        for idx, img_url in enumerate(images, 1):
+            self.log(f"   📷 处理图片 {idx}/{len(images)}")
+            
+            # 下载原图
+            success, path, error = cache_manager.download_and_cache(img_url)
+            
+            if success:
+                cached_count += 1
+                if path:
+                    file_size = path.stat().st_size
+                    self.log(f"   ✅ 原图缓存成功: {path.name} ({file_size/1024:.1f}KB)")
+                
+                # 下载缩略图
+                thumbnail_url = None
+                if '/large/' in img_url:
+                    thumbnail_url = img_url.replace('/large/', '/thumbnail/')
+                elif '/original/' in img_url:
+                    thumbnail_url = img_url.replace('/original/', '/thumbnail/')
+                
+                if thumbnail_url and thumbnail_url != img_url:
+                    self._rate_limit_wait("缩略图下载")
+                    success_thumb, thumb_path, _ = cache_manager.download_and_cache(thumbnail_url)
+                    if success_thumb and thumb_path:
+                        file_size = thumb_path.stat().st_size
+                        self.log(f"   ✅ 缩略图缓存成功: {thumb_path.name} ({file_size/1024:.1f}KB)")
+            else:
+                self.log(f"   ❌ 图片下载失败: {error}")
+            
+            # 单张图片之间随机间隔（30-60秒）
+            if idx < len(images):
+                self._rate_limit_wait("图片缓存")
+        
+        self.log(f"   ✅ 图片处理完成：{cached_count}/{len(images)}张")
+        return (cached_count, len(images))
+
+    def handle_article_pdf(self, article_url: str, topic: Dict, crawler) -> bool:
+        """
+        处理文章链接（不推送）
+        
+        流程：爬取 -> PDF -> 水印 -> 加密 -> 改名 -> 保存本地
+        """
+        try:
+            title = topic.get('title', '无标题')
+            topic_files = topic.get('talk', {}).get('files', [])
+            
+            self.log(f"📄 开始处理文章链接...")
+            
+            # 检查是否已有PDF
+            if topic_files:
+                for file_info in topic_files:
+                    local_path = file_info.get('local_path', '')
+                    if local_path and local_path.endswith('.pdf') and os.path.exists(local_path):
+                        self.log(f"   ✅ 已存在PDF: {os.path.basename(local_path)}")
+                        return True
+            
+            # 获取PDF输出目录
+            pdf_output_dir = self._get_pdf_output_dir(crawler)
+            
+            # 爬取网页生成PDF
+            pdf_path = self.convert_url_to_pdf(article_url, pdf_output_dir, title, cookie=crawler.cookie)
+            
+            if pdf_path:
+                # 添加背景和干扰
+                temp_pdf_path = pdf_path.replace('.pdf', '_temp_with_bg.pdf')
+                if self._add_background_and_noise_to_pdf(pdf_path, temp_pdf_path, group_id=crawler.group_id):
+                    # 加密
+                    self._encrypt_pdf(temp_pdf_path)
+                    
+                    # 用处理后的文件覆盖原文件
+                    shutil.move(temp_pdf_path, pdf_path)
+
+                    self.log(f"   ✅ PDF处理完成: {os.path.basename(pdf_path)}")
+                    return True
+                else:
+                    # 失败时仍然加密原文件
+                    self._encrypt_pdf(pdf_path)
+                    self.log(f"   ✅ PDF处理完成: {os.path.basename(pdf_path)}")
+                    return True
+            
+            self.log(f"   ❌ PDF生成失败")
+            return False
+            
+        except Exception as e:
+            self.log(f"   ❌ 文章处理失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+
+    # inline_article_url处理        
     def _extract_article_url(self, talk: Dict, topic: Dict) -> Optional[str]:
         """提取文章链接"""
         # 优先从talk.article中获取链接
@@ -537,6 +690,7 @@ class WeComWebhook:
         # 从topic顶层获取链接
         return topic.get('inline_article_url') or topic.get('article_url')
     
+
     def _html_wrap_content(self, html_content: str, width: int = 46) -> str:
         """
         对 HTML 中的文本内容进行换行处理，链接单独一行显示,避免 PDF 生成时文本溢出
@@ -748,99 +902,6 @@ class WeComWebhook:
             return None
 
 
-    def convert_text_to_pdf(self, title: str, content: str, author_name: str,
-                        create_time: str, index: int, total: int,
-                        output_dir: str, group_id: str = None) -> Optional[str]:
-
-        """
-        将文本内容转换为PDF（分支4使用）
-                
-        Args:
-            title: 标题
-            content: 内容
-            author_name: 作者名
-            create_time: 创建时间
-            index: 当前索引
-            total: 总数
-            output_dir: PDF输出目录
-                
-        Returns:
-            PDF文件路径，失败返回None
-        """
-        try:
-            # 清理HTML标签
-            title = clean_html_tags(title)
-            content = clean_html_tags(content)
-            
-            # 使用PIL绘制PDF
-            pdf_path = self.convert_text_and_images_to_pdf(
-                title=title,
-                content=content,
-                author_name=author_name,
-                create_time=create_time,
-                image_urls=[],  # 纯文本，无图片
-                index=index,
-                total=total,
-                output_dir=output_dir,
-                group_id=group_id
-            )
-            
-            return pdf_path
-            
-        except Exception as e:
-            self.log(f"   ❌ 文本转PDF失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
-
-    def convert_text_and_images_to_pdf(self, title: str, content: str, author_name: str,
-                                create_time: str, index: int, total: int,
-                                image_urls: List[str], output_dir: str,
-                                group_id: str = None) -> Optional[str]:
-
-        """
-        将文本内容和图片合并成一个PDF（分支3使用）
-        
-        """
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # 下载图片
-            image_paths = []
-            self.log(f"   🖼️ 下载{len(image_urls)}张图片...")
-            
-            for i, img_url in enumerate(image_urls, 1):
-                try:
-                    img_path = self._download_image(img_url, output_dir, i)
-                    if img_path:
-                        image_paths.append(img_path)
-                        self.log(f"   ✅ 图片{i}下载成功")
-                except Exception as e:
-                    self.log(f"   ⚠️ 图片{i}下载失败: {e}")
-            
-            # 绘制PDF
-            pdf_path = self._text_and_images_to_pdf(
-                title=title,
-                content=content,
-                author_name=author_name,
-                create_time=create_time,
-                image_paths=image_paths,
-                index=index,
-                total=total,
-                output_dir=output_dir,
-                group_id=group_id
-
-            )
-            
-            return pdf_path
-            
-        except Exception as e:
-            self.log(f"   ❌ PDF生成失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
     def _format_file_size(self, size_bytes: int) -> str:
         """格式化文件大小"""
         for unit in ['B', 'KB', 'MB', 'GB']:
@@ -870,196 +931,7 @@ class WeComWebhook:
         
         # ⭐ 添加返回语句
         return pdf_dir
-    
-    def _handle_article_pdf(self, index: int, article_url: str, title: str, crawler, total: int, topic_id: int = None, topic_files: list = None) -> bool:
-        """处理文章PDF推送（分支1）- 优先使用已生成的PDF"""
-        try:
-            # 🆕 优先检查 topic_files 中是否已有 PDF
-            if topic_files:
-                for file_info in topic_files:
-                    local_path = file_info.get('local_path', '')
-                    if local_path and local_path.endswith('.pdf') and os.path.exists(local_path):
-                        self.log(f"📄 第{index}/{total}条：发现已生成的PDF，直接推送...")
-                        if self.send_file(local_path):
-                            self.log(f"   ✅ PDF推送成功")
-                            return True
-                        else:
-                            self.log(f"   ⚠️ PDF推送失败，尝试重新生成")
-                            break
-            
-            # 没有现成的 PDF，需要生成
-            self.log(f"📄 第{index}/{total}条：检测到文章链接，开始转换PDF...")
-            
-            # 获取PDF输出目录
-            pdf_output_dir = self._get_pdf_output_dir(crawler)
-            
-            # 调用自己的方法，传入cookie
-            pdf_path = self.convert_url_to_pdf(
-                article_url, 
-                pdf_output_dir, 
-                title,
-                cookie=crawler.cookie
-            )
-            
-            if pdf_path:
-                # 添加背景和干扰
-                temp_pdf_path = pdf_path.replace('.pdf', '_temp_with_bg.pdf')
-                if self._add_background_and_noise_to_pdf(pdf_path, temp_pdf_path, group_id=crawler.group_id):
-                    # 加密
-                    self._encrypt_pdf(temp_pdf_path)
-                    
-                    # 重命名
-                    final_path = pdf_path.replace('.pdf', '_作者微信MK0914666.pdf')
-                    shutil.move(temp_pdf_path, final_path)
-                    
-                    # 删除原文件
-                    try:
-                        os.remove(pdf_path)
-                    except:
-                        pass
-                    
-                    pdf_path = final_path
-                    self.log(f"   📋 已添加背景和干扰")
-                else:
-                    # 失败时仍然加密原文件
-                    self._encrypt_pdf(pdf_path)
-                
-                if self.send_file(pdf_path):
-                    self.log(f"   ✅ PDF发送成功")
-                    return True
-                else:
-                    self.log(f"   ⚠️ PDF发送失败")
-            else:
-                self.log(f"   ⚠️ PDF转换失败")
-            
-            return False
-        except Exception as e:
-            self.log(f"   ❌ PDF处理异常: {e}")
-            return False
 
-    
-    def _handle_attachments(self, index: int, topic_files: List[Dict], title: str, crawler, total: int) -> bool:
-        """处理附件下载和推送（分支2）
-        
-        处理流程：
-        1. 下载源文件
-        2. 添加水印
-        3. 加密
-        4. 删除源文件，只保留处理后的文件
-        5. 推送
-        """
-        try:
-            self.log(f"📎 第{index}/{total}条：检测到附件（共{len(topic_files)}个）")
-            
-            # 获取文件下载器
-            downloader = crawler.get_file_downloader()
-            
-            pushed_count = 0
-            for file_info in topic_files:
-                try:
-                    # 构造file_info字典
-                    file_data = {'file': file_info}
-                    
-                    # 获取文件名
-                    file_name = file_info.get('name', 'Unknown')
-                    # 清理文件名（保留中文）
-                    safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-（）()[]{}' or '\u4e00' <= c <= '\u9fff')
-                    if not safe_filename:
-                        safe_filename = f"file_{file_info.get('id', 'unknown')}"
-                    
-                    # 源文件路径
-                    source_path = os.path.join(downloader.download_dir, safe_filename)
-                    
-                    # 处理后的文件名（改名）
-                    base_name = os.path.splitext(safe_filename)[0]
-                    final_filename = f"{base_name}_作者微信MK0914666.pdf"
-                    final_path = os.path.join(downloader.download_dir, final_filename)
-                    
-                    # ============ 检查最终文件是否已存在 ============
-                    if os.path.exists(final_path):
-                        self.log(f"   ✅ 已存在处理后的文件: {final_filename}")
-                        # 直接推送
-                        if self.send_file(final_path):
-                            self.log(f"   ✅ 企业微信推送成功")
-                            pushed_count += 1
-                        else:
-                            self.log(f"   ⚠️ 企业微信推送失败")
-                        continue
-                    
-                    # ============ 下载源文件（如果不存在） ============
-                    if not os.path.exists(source_path):
-                        result = downloader.download_file(file_data)
-                        if not result:
-                            self.log(f"   ❌ 文件下载失败: {file_name}")
-                            continue
-                        if result == "skipped":
-                            self.log(f"   ⏭️ 文件已存在但未处理: {safe_filename}")
-                    
-                    # 确认源文件存在
-                    if not os.path.exists(source_path):
-                        self.log(f"   ❌ 源文件不存在: {source_path}")
-                        continue
-                    
-                    # ============ 处理PDF文件 ============
-                    if source_path.lower().endswith('.pdf'):
-                        self.log(f"   🖼️ 处理PDF: {safe_filename}")
-                        
-                        # 步骤1: 添加背景和水印
-                        temp_processed = source_path.replace('.pdf', '_temp_processed.pdf')
-                        if not self._add_background_and_noise_to_pdf(source_path, temp_processed, group_id=crawler.group_id if crawler else None):
-                            self.log(f"   ⚠️ 处理失败，使用源文件")
-                            temp_processed = source_path
-                        
-                        # 步骤2: 加密
-                        self._encrypt_pdf(temp_processed)
-                        
-                        # 步骤3: 重命名
-                        shutil.move(temp_processed, final_path)
-                        
-                        # 步骤4: 删除源文件
-                        if source_path != temp_processed:
-                            try:
-                                os.remove(source_path)
-                                self.log(f"   🗑️ 已删除源文件: {safe_filename}")
-                            except:
-                                pass
-                        
-                        self.log(f"   ✅ 处理完成: {final_filename}")
-                        
-                        # 步骤5: 推送
-                        if self.send_file(final_path):
-                            self.log(f"   ✅ 企业微信推送成功")
-                            pushed_count += 1
-                        else:
-                            self.log(f"   ⚠️ 企业微信推送失败")
-
-                            
-                    else:
-                        # 非PDF文件，直接发送
-                        self.log(f"   📱 正在推送: {safe_filename}")
-                        if self.send_file(source_path):
-                            self.log(f"   ✅ 企业微信推送成功")
-                            pushed_count += 1
-                        else:
-                            self.log(f"   ⚠️ 企业微信推送失败")
-                            
-                except Exception as e:
-                    self.log(f"   ❌ 附件处理异常: {e}")
-                    import traceback
-                    traceback.print_exc()
-            
-            if pushed_count > 0:
-                self.log(f"   ✅ 附件处理完成：推送{pushed_count}个")
-                return True
-            else:
-                self.log(f"   ⚠️ 所有附件推送失败")
-                return False
-                
-        except Exception as e:
-            self.log(f"   ❌ 附件处理异常: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
 
     def _add_background_and_noise_to_pdf(self, source_pdf: str, output_pdf: str, 
                                          group_id: str = None) -> bool:
@@ -1073,7 +945,6 @@ class WeComWebhook:
             temp_dir = os.path.join(os.path.dirname(__file__), "temp_pdf_pages")
             os.makedirs(temp_dir, exist_ok=True)
             
-            enable_noise = group_id in self.NOISE_GROUPS if group_id else False
             
             src_doc = fitz.open(source_pdf)
             out_doc = fitz.open()
@@ -1120,24 +991,23 @@ class WeComWebhook:
                 )
                 
                 # ============ 添加干扰文字 ============
-                if enable_noise:
-                    for _ in range(insert_times):
-                        # 随机位置
-                        noise_x = random.randint(30, max(31, int(src_w) - 150))
-                        noise_y = random.randint(50, max(51, int(src_h) - 50))
-                        
-                        out_page.insert_text(
-                            fitz.Point(noise_x, noise_y),
-                            noise_text,
-                            fontname="china-s",  # 使用内置简体中文字体
-                            fontfile=font_path,
-                            fontsize=font_size,
-                            color=font_color
-                        )
+                for _ in range(insert_times):
+                    # 随机位置
+                    noise_x = random.randint(30, max(31, int(src_w) - 150))
+                    noise_y = random.randint(50, max(51, int(src_h) - 50))
                     
-                    self.log(f"   📄 第{page_num+1}页: {src_w:.0f}x{src_h:.0f}, 已添加{insert_times}处干扰文字")
-                else:
-                    self.log(f"   📄 第{page_num+1}页: {src_w:.0f}x{src_h:.0f}")
+                    out_page.insert_text(
+                        fitz.Point(noise_x, noise_y),
+                        noise_text,
+                        fontname="china-s",  # 使用内置简体中文字体
+                        fontfile=font_path,
+                        fontsize=font_size,
+                        color=font_color
+                    )
+                
+                self.log(f"   📄 第{page_num+1}页: {src_w:.0f}x{src_h:.0f}, 已添加{insert_times}处干扰文字")
+            else:
+                self.log(f"   📄 第{page_num+1}页: {src_w:.0f}x{src_h:.0f}")
             
             # 保存
             out_doc.save(output_pdf)
@@ -1152,114 +1022,6 @@ class WeComWebhook:
             import traceback
             traceback.print_exc()
             return False
-
-    
-    def _extract_images(self, talk: Dict) -> List[str]:
-        """
-        从内容中提取图片URL列表
-        
-        Args:
-            talk: 话题的talk字段
-            
-        Returns:
-            图片URL列表
-        """
-        images = []
-        
-        # 方法1: 从talk.images字段提取
-        if 'images' in talk:
-            image_list = talk.get('images', [])
-            for img in image_list:
-                if isinstance(img, dict):
-                    # 尝试多个可能的URL字段
-                    img_url = (img.get('original', {}).get('url') or
-                               img.get('large', {}).get('url') or
-                               img.get('thumbnail', {}).get('url'))
-                    if img_url:
-                        images.append(img_url)
-                elif isinstance(img, str):
-                    # 图片是URL字符串
-                    images.append(img)
-        
-        # 方法2: 从text字段中提取img标签
-        text = talk.get('text', '')
-        if text:
-            # 匹配HTML中的img标签，提取src属性
-            img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
-            matches = re.findall(img_pattern, text, re.IGNORECASE)
-            images.extend(matches)
-        
-        # 去重
-        images = list(dict.fromkeys(images))
-        
-        return images
-
-    def _download_image(self, image_url: str, save_dir: str, index: int = 0) -> Optional[str]:
-        """
-        下载图片到本地
-        
-        Args:
-            image_url: 图片URL
-            save_dir: 保存目录
-            index: 次序编号（用于命名）
-            
-        Returns:
-            图片文件路径，失败返回None
-        """
-        try:
-            self.log(f"   📥 开始下载图片: {image_url}")
-            
-            # 确保保存目录存在
-            os.makedirs(save_dir, exist_ok=True)
-            
-            # 下载图片
-            response = self.session.get(image_url, timeout=30)
-            if response.status_code != 200:
-                self.log(f"   ❌ 图片下载失败: HTTP {response.status_code}")
-                return None
-            
-            # 根据Content-Type确定扩展名
-            content_type = response.headers.get('Content-Type', '')
-            ext_map = {
-                'image/jpeg': '.jpg',
-                'image/jpg': '.jpg',
-                'image/png': '.png',
-                'image/gif': '.gif',
-                'image/webp': '.webp',
-                'image/bmp': '.bmp'
-            }
-            
-            ext = '.jpg'  # 默认扩展名
-            if content_type:
-                for ct, e in ext_map.items():
-                    if ct in content_type.lower():
-                        ext = e
-                        break
-            
-            # ✅ 使用hash值生成简短文件名
-            # 对URL进行MD5 hash，取前8位
-            hash_value = hashlib.md5(image_url.encode()).hexdigest()[:8]
-            filename = f"{hash_value}_{index}{ext}"
-            
-            image_path = os.path.join(save_dir, filename)
-            
-            # 检查图片是否已存在
-            if os.path.exists(image_path):
-                self.log(f"   ✅ 图片已存在，跳过下载: {filename}")
-                return image_path
-            
-            # 保存图片
-            with open(image_path, 'wb') as f:
-                f.write(response.content)
-            
-            file_size = os.path.getsize(image_path)
-            self.log(f"   ✅ 图片下载成功: {filename} ({file_size/1024:.1f}KB)")
-            
-            return image_path
-            
-        except Exception as e:
-            self.log(f"   ❌ 图片下载异常: {e}")
-            return None
 
     def _encrypt_pdf(self, pdf_path: str, owner_password: str = "protect_pdf@Arron") -> bool:
         """
@@ -1304,607 +1066,3 @@ class WeComWebhook:
             traceback.print_exc()
             return False
 
-    def _calculate_text_lines(self, content: str, max_width: float, fontsize: int = 18,
-                          font_path: str = None, font_name: str = None) -> list:
-        """计算文字行（自动换行），使用字符宽度估算"""
-        lines = []
-        current_line = ""
-        
-        for char in content:
-            if char == '\n':
-                if current_line:
-                    lines.append(current_line)
-                    current_line = ""
-                lines.append(None)  # 空行标记
-                continue
-            
-            test_line = current_line + char
-            
-            # 计算文字宽度（估算方法）
-            # 中文字符约等于 fontsize 宽度，英文约等于 fontsize * 0.5
-            text_width = 0
-            for c in test_line:
-                if '\u4e00' <= c <= '\u9fff':
-                    text_width += fontsize * 1.0  # 中文字符
-                elif c.isalpha() or c.isdigit():
-                    text_width += fontsize * 0.5  # 英文/数字
-                else:
-                    text_width += fontsize * 0.6  # 其他字符（标点等）
-            
-            if text_width <= max_width:
-                current_line = test_line
-            else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = char
-        
-        if current_line:
-            lines.append(current_line)
-        
-        return lines
-
-    def _text_and_images_to_pdf(self, title: str, content: str, author_name: str, 
-                            create_time: str, image_paths: List[str], 
-                            index: int, total: int, output_dir: str,
-                            group_id: str = None) -> Optional[str]:
-        """
-        将文本内容和图片生成PDF（使用 PIL 渲染）
-        """
-        try:
-            # 清理HTML标签
-            title = clean_html_tags(title)
-            content = clean_html_tags(content)
-            
-            # 使用 PIL 渲染
-            pdf_path = self._create_pdf_with_pil(
-                title=title,
-                content=content,
-                author_name=author_name,
-                create_time=create_time,
-                image_paths=image_paths,
-                output_dir=output_dir,
-                group_id=group_id
-            )
-            
-            return pdf_path
-            
-        except Exception as e:
-            self.log(f"   ❌ PDF生成失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
-    def _handle_images(self, index: int, image_urls: List[str], title: str, 
-                   crawler, total: int) -> bool:
-        """
-        处理图片下载和推送（只负责图片，不负责文本）
-        
-        Args:
-            index: 当前话题索引
-            image_urls: 图片URL列表
-            title: 话题标题
-            crawler: 爬虫实例
-            total: 总话题数
-            
-        Returns:
-            是否处理成功
-        """
-        try:
-            self.log(f"🖼️ 第{index}/{total}条：检测到图片（共{len(image_urls)}张），开始下载...")
-            
-            # 获取下载目录
-            pdf_output_dir = self._get_pdf_output_dir(crawler)
-            
-            # 下载图片
-            downloaded_images = []
-            for i, img_url in enumerate(image_urls, 1):
-                try:
-                    file_path = self._download_image(img_url, pdf_output_dir)
-                    if file_path:
-                        downloaded_images.append(file_path)
-                    else:
-                        self.log(f"   ❌ 图片{i}/{len(image_urls)}下载失败")
-                except Exception as e:
-                    self.log(f"   ❌ 图片{i}/{len(image_urls)}下载异常: {e}")
-            
-            if not downloaded_images:
-                self.log(f"   ⚠️ 所有图片下载失败")
-                return False
-            
-            # 推送图片（最多推前8张）
-            max_images = min(len(downloaded_images), 8)
-            pushed_count = 0
-            for i in range(max_images):
-                try:
-                    self.log(f"   📱 正在推送图片{i+1}/{max_images}...")
-                    if self.send_image(downloaded_images[i]):
-                        self.log(f"   ✅ 图片{i+1}/{max_images}推送成功")
-                        pushed_count += 1
-                    else:
-                        self.log(f"   ❌ 图片{i+1}/{max_images}推送失败")
-                except Exception as e:
-                    self.log(f"   ❌ 图片{i+1}/{max_images}推送异常: {e}")
-            
-            if pushed_count > 0:
-                self.log(f"   ✅ 图片处理完成：下载{len(downloaded_images)}张，推送{pushed_count}张")
-                return True
-            else:
-                self.log(f"   ⚠️ 图片推送失败")
-                return False
-                
-        except Exception as e:
-            self.log(f"   ❌ 图片处理异常: {e}")
-            return False
-
-    def send_image(self, image_path: str) -> bool:
-        """
-        发送图片消息（使用base64方式）
-        
-        Args:
-            image_path: 图片文件路径
-            
-        Returns:
-            是否发送成功
-        """
-        if not self.enabled:
-            return False
-        
-        if not self.webhook_url:
-            self.log("⚠️ 企业微信webhook地址未配置")
-            return False
-        
-        try:
-            # 检查文件是否存在
-            if not os.path.exists(image_path):
-                self.log(f"❌ 图片不存在: {image_path}")
-                return False
-            
-            # 检查文件大小
-            file_size = os.path.getsize(image_path)
-            max_size = 2 * 1024 * 1024  # 2MB
-            if file_size > max_size:
-                self.log(f"❌ 图片大小超过2MB限制: {file_size/1024/1024:.2f}MB")
-                return False
-            
-            self.log(f"   📷 正在发送图片: {os.path.basename(image_path)} ({file_size/1024:.1f}KB)")
-            
-            # 读取图片并转换为base64
-            with open(image_path, 'rb') as f:
-                image_data = f.read()
-            
-            # 计算md5
-            import hashlib
-            md5_value = hashlib.md5(image_data).hexdigest()
-            
-            # 转换为base64
-            import base64
-            base64_data = base64.b64encode(image_data).decode('utf-8')
-            
-            # 构建消息体
-            payload = {
-                "msgtype": "image",
-                "image": {
-                    "base64": base64_data,
-                    "md5": md5_value
-                }
-            }
-            
-            # 发送消息
-            response = self.session.post(
-                self.webhook_url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=30
-            )
-            
-            result = response.json()
-            if result.get("errcode") == 0:
-                self.log(f"   ✅ 图片发送成功")
-                return True
-            else:
-                self.log(f"   ❌ 图片发送失败: {result.get('errmsg')}")
-                return False
-                
-        except Exception as e:
-            self.log(f"   ❌ 图片发送异常: {e}")
-            return False
-        
-    def _create_images_pdf_with_mupdf(self, image_paths: List[str], output_path: str,
-                                   background_image_path: str = None) -> bool:
-        """使用 PyMuPDF 创建图片PDF"""
-        try:
-            doc = fitz.open()
-            
-            page_width = 794
-            page_height = 1123
-            page_padding = 40
-            title_height = 80
-            
-            font_path = r"C:\Windows\Fonts\simhei.ttf"
-            font_name = "simhei"
-            
-            total_images = len(image_paths)
-            
-            for i, img_path in enumerate(image_paths):
-                page = doc.new_page(width=page_width, height=page_height)
-                
-                # 插入背景图片（如有）
-                if background_image_path and os.path.exists(background_image_path):
-                    bg_rect = fitz.Rect(0, 0, page_width, page_height)
-                    page.insert_image(bg_rect, filename=background_image_path)
-                
-                # 绘制标题
-                title_text = f"附件图片 ({i+1}/{total_images})"
-                page.insert_text(
-                    fitz.Point(page_padding, 50),
-                    title_text,
-                    fontfile=font_path,
-                    fontname=font_name,
-                    fontsize=20,
-                    color=(0, 0, 0)
-                )
-                
-                # 绘制分隔线
-                page.draw_line(
-                    fitz.Point(page_padding, 70),
-                    fitz.Point(page_width - page_padding, 70),
-                    color=(0.78, 0.78, 0.78),
-                    width=1
-                )
-                
-                # 获取图片实际尺寸
-                img_doc = fitz.open(img_path)
-                img_page = img_doc[0]
-                img_w = img_page.rect.width
-                img_h = img_page.rect.height
-                img_doc.close()
-                
-                # 最大可用区域（调整边距）
-                max_width = page_width - page_padding * 2
-                max_height = page_height - title_height - page_padding * 2
-                
-                # 计算缩放比例
-                ratio_w = max_width / img_w
-                ratio_h = max_height / img_h
-                ratio = min(ratio_w, ratio_h, 1)
-                
-                new_w = img_w * ratio
-                new_h = img_h * ratio
-                
-                # 计算居中位置
-                x = (page_width - new_w) / 2
-                y = title_height + page_padding
-                
-                # 插入图片
-                img_rect = fitz.Rect(x, y, x + new_w, y + new_h)
-                page.insert_image(img_rect, filename=img_path)
-                
-                self.log(f"   ✅ 图片{i+1}处理成功 ({img_w:.0f}x{img_h:.0f} -> {new_w:.0f}x{new_h:.0f})")
-            
-            # 保存（压缩）
-            doc.save(output_path, deflate=True, garbage=3)
-            doc.close()
-            
-            self.log(f"   📄 生成 {total_images} 页图片PDF")
-            return True
-            
-        except Exception as e:
-            self.log(f"   ❌ 图片PDF生成失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-            
-    def _create_pdf_with_pil(self, title: str, content: str, author_name: str,
-                            create_time: str, image_paths: List[str],
-                            output_dir: str, group_id: str = None) -> Optional[str]:
-        """
-        使用 PIL 渲染文本到背景图，生成带干扰功能的 PDF
-        
-        Args:
-            title: 标题
-            content: 内容
-            author_name: 作者名
-            create_time: 创建时间
-            image_paths: 图片路径列表
-            output_dir: 输出目录
-            group_id: 群组ID（用于判断是否启用干扰）
-            
-        Returns:
-            PDF文件路径，失败返回None
-        """
-        try:
-            # ============ 路径配置 ============
-            bg_path = os.path.join(os.path.dirname(__file__), "images", "pdf_background.png")
-            temp_dir = os.path.join(os.path.dirname(__file__), "temp_pdf_pages")
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # ============ 页面参数 ============
-            img_width = 794
-            img_height = 1123
-            footer_reserved = 140
-            editable_height = img_height - footer_reserved
-            
-            # ============ 字体配置 ============
-            default_font_path = r"C:\Windows\Fonts\msyh.ttc"
-            
-            # 干扰字体列表
-            noise_fonts = [
-                r"C:\Windows\Fonts\miaobihuiyinti_0.ttf",
-                r"C:\Windows\Fonts\miaobishuobingti.ttf",
-            ]
-            
-            try:
-                font_title = ImageFont.truetype(default_font_path, 32)
-                font_text = ImageFont.truetype(default_font_path, 22)
-                font_info = ImageFont.truetype(default_font_path, 16)
-                font_noise_text = ImageFont.truetype(default_font_path, 16)  # 干扰文字小字号
-            except Exception as e:
-                self.log(f"   ❌ 字体加载失败: {e}")
-                return None
-
-            # 选择干扰字体（只用于随机更换字体）
-            selected_noise_font = random.choice(noise_fonts)
-            try:
-                font_noise = ImageFont.truetype(selected_noise_font, 22)
-            except Exception as e:
-                self.log(f"   ⚠️ 干扰字体加载失败: {e}")
-                font_noise = font_text
-            
-            # ============ 判断是否启用干扰功能 ============
-            enable_noise = group_id in self.NOISE_GROUPS if group_id else False
-            
-            # ============ 干扰文字内容 ============
-            noise_text = "（原作者微信：MK0914666）"
-            
-            # ============ 处理内容 ============
-            if enable_noise:
-                marked_content = self._process_content_with_noise(content, noise_text, min_noise_chars=100)
-                self.log(f"   🔧 已启用干扰功能（群组: {group_id}）")
-            else:
-                # 不启用干扰，全部使用正常字体（类型0）
-                marked_content = [(char, 0) for char in content]
-            
-            # ============ 加载背景图片 ============
-            def load_background():
-                if os.path.exists(bg_path):
-                    img = Image.open(bg_path)
-                    img = img.resize((img_width, img_height), Image.Resampling.LANCZOS)
-                    if img.mode != 'RGB':
-                        img = img.convert('RGB')
-                    return img
-                return Image.new('RGB', (img_width, img_height), (255, 255, 255))
-            
-            # ============ 自动换行处理 ============
-            max_content_width = img_width - 80
-            
-            temp_img = Image.new('RGB', (1, 1))
-            temp_draw = ImageDraw.Draw(temp_img)
-            
-            content_lines = []
-            current_line = []
-            current_width = 0
-            
-            for char, font_type in marked_content:
-                if char == '\n':
-                    if current_line:
-                        content_lines.append(current_line)
-                        content_lines.append([])  # 只在段落结束后添加一个空行
-                    current_line = []
-                    current_width = 0
-                    continue
-                
-                font = font_noise if font_type == 1 else (font_noise_text if font_type == 2 else font_text)
-                bbox = temp_draw.textbbox((0, 0), char, font=font)
-                char_width = bbox[2] - bbox[0]
-                
-                if current_width + char_width <= max_content_width:
-                    current_line.append((char, font_type))
-                    current_width += char_width
-                else:
-                    if current_line:
-                        content_lines.append(current_line)
-                    current_line = [(char, font_type)]
-                    current_width = char_width
-            
-            if current_line:
-                content_lines.append(current_line)
-            
-            # ============ 创建页面辅助函数 ============
-            def create_new_page(is_first_page):
-                page = load_background()
-                draw = ImageDraw.Draw(page)
-                y = 40
-                
-                if is_first_page:
-                    draw.rectangle([30, y, img_width - 30, y + 3], fill=(200, 200, 200))
-                    y += 20
-                    
-                    bbox = draw.textbbox((0, 0), "新内容推送", font=font_title)
-                    title_w = bbox[2] - bbox[0]
-                    draw.text(((img_width - title_w) // 2, y), "新内容推送", fill=(0, 0, 0), font=font_title)
-                    y += 50
-                    
-                    draw.line([30, y, img_width - 30, y], fill=(200, 200, 200), width=2)
-                    y += 25
-                    
-                    draw.text((30, y), f" 作者: {author_name}", fill=(100, 100, 100), font=font_info)
-                    y += 25
-                    draw.text((30, y), f" 时间: {create_time}", fill=(100, 100, 100), font=font_info)
-                    y += 35
-                    
-                    draw.line([30, y, img_width - 30, y], fill=(200, 200, 200), width=1)
-                    y += 25
-                    
-                    draw.text((30, y), "【内容】:", fill=(70, 70, 70), font=font_text)
-                    y += 30
-                else:
-                    draw.text((30, y), "新内容推送 (续)", fill=(70, 70, 70), font=font_info)
-                    y += 25
-                    draw.line([30, y, img_width - 30, y], fill=(200, 200, 200), width=1)
-                    y += 20
-                
-                return page, draw, y
-            
-            # ============ 多页渲染（带行间干扰文字） ============
-            pages = []
-            current_page, current_draw, y = create_new_page(is_first_page=True)
-            pages.append(current_page)
-            
-            text_color = (70, 70, 70)
-            noise_color = (50, 100, 200)  # 蓝色
-            
-            for line_chars in content_lines:
-                if y + 28 > editable_height:
-                    current_page, current_draw, y = create_new_page(is_first_page=False)
-                    pages.append(current_page)
-                
-                # 渲染正文行
-                x = 40
-                for char, font_type in line_chars:
-                    if font_type == 0:
-                        font = font_text
-                        color = text_color
-                    elif font_type == 1:
-                        font = font_noise
-                        color = text_color
-                    else:  # font_type == 2
-                        font = font_noise_text
-                        color = noise_color
-                    
-                    current_draw.text((x, y), char, fill=color, font=font)
-                    bbox = current_draw.textbbox((x, y), char, font=font)
-                    x = bbox[2]
-                
-                y += 28
-            
-            # ============ 保存临时图片 ============
-            timestamp = int(time.time() * 1000)
-            temp_images = []
-            for i, page in enumerate(pages):
-                temp_path = os.path.join(temp_dir, f"page_{timestamp}_{i}.png")
-                page.save(temp_path)
-                temp_images.append(temp_path)
-            
-
-            # ============ 图片转PDF ============
-            temp_pdf = os.path.join(temp_dir, f"temp_{timestamp}.pdf")
-            
-            doc = fitz.open()
-            for img_path in temp_images:
-                page = doc.new_page(width=img_width, height=img_height)
-                rect = fitz.Rect(0, 0, img_width, img_height)
-                page.insert_image(rect, filename=img_path)
-            doc.save(temp_pdf)
-            doc.close()
-            
-            # ============ 处理图片（如有） ============
-            if image_paths:
-                doc = fitz.open(temp_pdf)
-                for img_path in image_paths:
-                    page = doc.new_page(width=img_width, height=img_height)
-                    rect = fitz.Rect(30, 30, img_width - 30, img_height - 30)
-                    page.insert_image(rect, filename=img_path)
-                
-                # 保存到不同的文件名（避免 save to original 错误）
-                temp_pdf_with_images = os.path.join(temp_dir, f"temp_with_images_{timestamp}.pdf")
-                doc.save(temp_pdf_with_images)
-                doc.close()
-                
-                # 删除原临时文件，使用新文件
-                try:
-                    os.remove(temp_pdf)
-                except:
-                    pass
-                temp_pdf = temp_pdf_with_images
-            
-            # ============ 加密PDF ============
-            encrypted_pdf = os.path.join(temp_dir, f"encrypted_{timestamp}.pdf")
-            
-            doc = fitz.open(temp_pdf)
-            owner_password = "protect_pdf@Arron"
-            perm = 0
-            
-            doc.save(
-                encrypted_pdf,
-                encryption=fitz.PDF_ENCRYPT_AES_256,
-                owner_pw=owner_password,
-                user_pw="",
-                permissions=perm
-            )
-            doc.close()
-            
-            # ============ 移动到最终位置 ============
-            safe_author = re.sub(r'[^\w\u4e00-\u9fff]', '', author_name)
-            time_str = time.strftime("%Y%m%d_%H%M%S")
-            pdf_filename = f"{safe_author}_新内容推送_{time_str}_作者微信MK0914666.pdf"
-            output_path = os.path.join(output_dir, pdf_filename)
-            
-            shutil.move(encrypted_pdf, output_path)
-            
-            # 清理临时文件
-            for temp_path in temp_images:
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-            try:
-                os.remove(temp_pdf)
-            except:
-                pass
-            
-            file_size = os.path.getsize(output_path) / 1024
-            self.log(f"   ✅ PDF生成成功: {pdf_filename} ({len(pages)}页, {file_size:.1f}KB)")
-            return output_path
-            
-        except Exception as e:
-            self.log(f"   ❌ PDF生成失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
-    def _process_content_with_noise(self, content: str, noise_text: str, min_noise_chars: int = 100):
-        """
-        处理内容：先随机选择字体更换位置，再插入干扰文字
-        
-        Args:
-            content: 原始内容
-            noise_text: 干扰文字
-            min_noise_chars: 最少更换字体的字符数
-            
-        Returns:
-            [(char, font_type), ...] 列表
-            font_type: 0=正常, 1=干扰字体, 2=干扰文字
-        """
-        chars = list(content)
-        total_len = len(chars)
-        
-        # 步骤1：先随机选择要更换字体的位置
-        normal_indices = [i for i, char in enumerate(chars) if char != '\n']
-        
-        selected_indices = set()
-        if len(normal_indices) > min_noise_chars:
-            noise_char_count = random.randint(min_noise_chars, min(min_noise_chars + 30, len(normal_indices)))
-            selected_indices = set(random.sample(normal_indices, noise_char_count))
-        
-        marked_content = []
-        for i, char in enumerate(chars):
-            font_type = 1 if i in selected_indices else 0
-            marked_content.append((char, font_type))
-        
-        # 步骤2：插入干扰文字（固定3次，随机位置）
-        insert_times = 3
-        
-        insert_positions = []
-        if total_len > 100:
-            available_positions = list(range(30, total_len - 30))
-            insert_positions = sorted(random.sample(available_positions, insert_times), reverse=True)
-        
-        for pos in insert_positions:
-            noise_chars = [(char, 2) for char in noise_text]  # 类型2=干扰文字
-            marked_content[pos:pos] = noise_chars
-        
-        self.log(f"   🎲 随机更换字体: {len(selected_indices)} 个字，插入干扰文字: {len(insert_positions)} 次")
-        
-        return marked_content
-
-    

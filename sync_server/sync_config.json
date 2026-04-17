@@ -1,0 +1,27 @@
+{
+  "server_user": "root",
+  "server_host": "149.104.30.138",
+  "server_port": 22,
+  "server_base_dir": "/opt/zsxq-reader/output/databases",
+  "server_auth_db": "/opt/zsxq-reader/auth.db",
+  "batch_size": 1000,
+  "temp_dir": "temp",
+  "local_base_dir": "../output/databases",
+  "local_auth_db": "../auth.db",
+  "ssh_key_path": "E:/Documents/cert/yecaoyun_id_rsa",
+  "exclude_patterns": [
+    "*.log",
+    "*.tmp",
+    "*.wal",
+    "*.shm"
+  ],
+  "file_sync": {
+    "enabled": true,
+    "directories": [
+      "downloads",
+      "images"
+    ],
+    "rsync_path": "rsync",
+    "rsync_options": "-rltvz --progress --no-perms --no-owner --no-group"
+  }
+}

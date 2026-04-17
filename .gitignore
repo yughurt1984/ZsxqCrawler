@@ -47,6 +47,7 @@ cache
 /.history/
 /downloads/
 /output/
+/images/
 temp_pdf_pages/
 
 # local config
