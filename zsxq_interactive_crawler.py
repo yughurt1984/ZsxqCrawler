@@ -888,9 +888,9 @@ class ZSXQInteractiveCrawler:
                 safe_title = re.sub(r'\s+', '', safe_title)
                 if len(safe_title) > 100:
                     safe_title = safe_title[:100]
-                pdf_filename = f"{safe_title}_添加作者微信MK0914666.pdf"
+                pdf_filename = f"{safe_title}.pdf"
             else:
-                pdf_filename = f"article_{topic_id}_添加作者微信MK0914666.pdf"
+                pdf_filename = f"article_{topic_id}.pdf"
             
             pdf_path = os.path.join(pdf_output_dir, pdf_filename)
             

@@ -6,7 +6,7 @@
 import os
 import sys
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 import json
@@ -2707,7 +2707,7 @@ async def refresh_topic(topic_id: int, group_id: str):
 
         # 使用知识星球API获取最新话题信息
         url = f"https://api.zsxq.com/v2/topics/{topic_id}/info"
-        headers = crawler.get_stealth_headers()
+        headers = crawler.get_stealth_headers(f"/v2/topics/{topic_id}/info")
 
         response = requests.get(url, headers=headers, timeout=30)
 
@@ -2850,7 +2850,7 @@ async def fetch_single_topic(group_id: str, topic_id: int, fetch_comments: bool 
 
         # 拉取话题详细信息
         url = f"https://api.zsxq.com/v2/topics/{topic_id}/info"
-        headers = crawler.get_stealth_headers()
+        headers = crawler.get_stealth_headers(f"/v2/topics/{topic_id}/info")
         response = requests.get(url, headers=headers, timeout=30)
 
         if response.status_code != 200:
@@ -5340,6 +5340,130 @@ async def get_column_topic_full_comments(group_id: str, topic_id: int):
     except Exception as e:
         log_exception(f"获取专栏完整评论失败: topic_id={topic_id}")
         raise HTTPException(status_code=500, detail=f"获取完整评论失败: {str(e)}")
+
+class SyncRequest(BaseModel):
+    """同步请求"""
+    group_id: Optional[str] = None
+    dry_run: bool = False
+    directory: Optional[str] = None  # for file sync: "downloads" or "images"
+
+@app.post("/api/sync/database")
+async def sync_database(request: SyncRequest, background_tasks: BackgroundTasks):
+    """数据库增量同步"""
+    try:
+        task_id = create_task("sync_database", f"数据库同步 (群组: {request.group_id or '所有'})")
+        
+        def run_sync_database_task(task_id: str, group_id: Optional[str], dry_run: bool):
+            try:
+                update_task(task_id, "running", "开始数据库同步...")
+                
+                def log_callback(message: str):
+                    add_task_log(task_id, message)
+                
+                # 导入同步模块
+                import sys
+                sync_dir = os.path.join(os.path.dirname(__file__), 'sync_server')
+                if sync_dir not in sys.path:
+                    sys.path.insert(0, sync_dir)
+                
+                from incremental_sync import IncrementalSyncManager
+                
+                # 加载同步配置
+                sync_config_path = os.path.join(sync_dir, 'sync_config.json')
+                sync_config = {}
+                if os.path.exists(sync_config_path):
+                    with open(sync_config_path, 'r', encoding='utf-8') as f:
+                        sync_config = json.load(f)
+                
+                # 创建同步管理器
+                sync_manager = IncrementalSyncManager(sync_config)
+                
+                # 执行同步
+                if group_id:
+                    sync_manager.sync_group(group_id, dry_run=dry_run)
+                else:
+                    sync_manager.sync_all_groups(dry_run=dry_run)
+                
+                sync_manager.close()
+                
+                if is_task_stopped(task_id):
+                    add_task_log(task_id, "🛑 任务已停止")
+                    update_task(task_id, "stopped", "任务已停止")
+                else:
+                    add_task_log(task_id, "✅ 数据库同步完成")
+                    update_task(task_id, "completed", "数据库同步完成")
+                    
+            except Exception as e:
+                if not is_task_stopped(task_id):
+                    add_task_log(task_id, f"❌ 同步失败: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    update_task(task_id, "failed", f"同步失败: {str(e)}")
+        
+        background_tasks.add_task(run_sync_database_task, task_id, request.group_id, request.dry_run)
+        
+        return {"task_id": task_id, "message": "同步任务已创建，正在后台执行"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建同步任务失败: {str(e)}")
+
+@app.post("/api/sync/files")
+async def sync_files(request: SyncRequest, background_tasks: BackgroundTasks):
+    """文件增量同步"""
+    try:
+        task_id = create_task("sync_files", f"文件同步 (群组: {request.group_id or '所有'})")
+        
+        def run_sync_files_task(task_id: str, group_id: Optional[str], directory: Optional[str], dry_run: bool):
+            try:
+                update_task(task_id, "running", "开始文件同步...")
+                
+                def log_callback(message: str):
+                    add_task_log(task_id, message)
+                
+                # 导入同步模块
+                import sys
+                sync_dir = os.path.join(os.path.dirname(__file__), 'sync_server')
+                if sync_dir not in sys.path:
+                    sys.path.insert(0, sync_dir)
+                
+                from file_sync import FileSyncManager
+                
+                # 加载同步配置
+                sync_config_path = os.path.join(sync_dir, 'sync_config.json')
+                sync_config = {}
+                if os.path.exists(sync_config_path):
+                    with open(sync_config_path, 'r', encoding='utf-8') as f:
+                        sync_config = json.load(f)
+                
+                # 创建同步管理器
+                sync_manager = FileSyncManager(sync_config)
+                
+                # 执行同步
+                if group_id and directory:
+                    sync_manager.sync_directory(group_id, directory, dry_run)
+                elif group_id:
+                    sync_manager.sync_group(group_id, dry_run)
+                else:
+                    sync_manager.sync_all_groups(dry_run)
+                
+                if is_task_stopped(task_id):
+                    add_task_log(task_id, "🛑 任务已停止")
+                    update_task(task_id, "stopped", "任务已停止")
+                else:
+                    add_task_log(task_id, "✅ 文件同步完成")
+                    update_task(task_id, "completed", "文件同步完成")
+                    
+            except Exception as e:
+                if not is_task_stopped(task_id):
+                    add_task_log(task_id, f"❌ 同步失败: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    update_task(task_id, "failed", f"同步失败: {str(e)}")
+        
+        background_tasks.add_task(run_sync_files_task, task_id, request.group_id, request.directory, request.dry_run)
+        
+        return {"task_id": task_id, "message": "同步任务已创建，正在后台执行"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建同步任务失败: {str(e)}")
 
 
 if __name__ == "__main__":

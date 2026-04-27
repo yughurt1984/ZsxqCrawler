@@ -120,17 +120,12 @@ class WeComWebhook:
             self.log_callback(message)  # 推送到前端
 
     def _rate_limit_wait(self, operation_name: str = "操作"):
-        """频率限制：随机等待 30-60 秒"""
-        current_time = time.time()
-        elapsed = current_time - self.last_operation_time
-        
+        """频率限制：严格随机等待 30-60 秒"""
         # 随机等待时间
-        wait_time_random = random.randint(self.rate_limit_min, self.rate_limit_max)
+        wait_time = random.randint(self.rate_limit_min, self.rate_limit_max)
         
-        if elapsed < wait_time_random:
-            wait_time = wait_time_random - elapsed
-            self.log(f"⏳ {operation_name}频率限制，等待 {wait_time:.0f} 秒...")
-            time.sleep(wait_time)
+        self.log(f"⏳ {operation_name}频率限制，等待 {wait_time:.0f} 秒...")
+        time.sleep(wait_time)
         
         self.last_operation_time = time.time()
 
@@ -501,7 +496,9 @@ class WeComWebhook:
                         # 步骤2: 加密
                         self._encrypt_pdf(temp_processed)
                         
-                        # 步骤3: 用处理后的文件覆盖源文件
+                        # 步骤3: 用处理后的文件覆盖源文件（Windows 兼容）
+                        if os.path.exists(source_path):
+                            os.remove(source_path)
                         shutil.move(temp_processed, source_path)
                         
                         self.log(f"   ✅ PDF处理完成: {safe_filename}")
@@ -656,7 +653,9 @@ class WeComWebhook:
                     # 加密
                     self._encrypt_pdf(temp_pdf_path)
                     
-                    # 用处理后的文件覆盖原文件
+                    # 用处理后的文件覆盖原文件（Windows 兼容）
+                    if os.path.exists(pdf_path):
+                        os.remove(pdf_path)
                     shutil.move(temp_pdf_path, pdf_path)
 
                     self.log(f"   ✅ PDF处理完成: {os.path.basename(pdf_path)}")
