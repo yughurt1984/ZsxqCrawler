@@ -842,10 +842,12 @@ export default function GroupDetailPage() {
     setRefreshingTopics(prev => new Set(prev).add(topicId));
 
     try {
-      const response = await apiClient.refreshTopic(topicId, groupId);
+            const response = await apiClient.refreshTopic(topicId, groupId);
 
       if (response.success) {
-        toast.success(`${response.message} - 点赞:${response.updated_data.likes_count} 评论:${response.updated_data.comments_count}`);
+        const imgInfo = response.updated_data.images_updated ? ` 图片:${response.updated_data.images_updated}` : '';
+        toast.success(`${response.message} - 点赞:${response.updated_data.likes_count} 评论:${response.updated_data.comments_count}${imgInfo}`);
+
 
         // 更新当前话题列表中的数据，而不是重新加载整个列表
         setTopics(prevTopics =>

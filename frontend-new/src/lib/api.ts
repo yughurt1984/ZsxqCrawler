@@ -57,6 +57,8 @@ export interface RefreshTopicResponse {
     comments_count: number;
     reading_count: number;
     readers_count?: number;
+    images_updated?: number;
+    comments_fetched?: number;
   };
 }
 

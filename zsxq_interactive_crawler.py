@@ -804,8 +804,23 @@ class ZSXQInteractiveCrawler:
             if not html_content:
                 self.log(f"   ⚠️ 获取 HTML 内容失败")
                 return False
+            
+            # 2. 提取纯文本并保存到数据库
+            try:
+                soup = BeautifulSoup(html_content, 'html.parser')
+                text_content = soup.get_text(separator='\n', strip=True)
+                self.db._upsert_article_content(
+                    topic_id=topic_id,
+                    article_id=article_info.get('article_id', ''),
+                    title=topic_data.get('title') or article_info.get('title', ''),
+                    text_content=text_content,
+                    content_url=inline_article_url
+                )
+                self.log(f"   ✅ 文章内容已保存到数据库")
+            except Exception as e:
+                self.log(f"   ⚠️ 保存文章内容失败: {e}")
                         
-            # 2. 生成 PDF
+            # 3. 生成 PDF
             pdf_path = self._generate_article_pdf(
                 html_content=html_content,
                 topic_id=topic_id,
@@ -813,7 +828,7 @@ class ZSXQInteractiveCrawler:
             )
             
             if pdf_path:
-            # 3. 插入 PDF 记录到 topic_files
+            # 4. 插入 PDF 记录到 topic_files
                 pdf_size = os.path.getsize(pdf_path)
                 pdf_name = os.path.basename(pdf_path)
                 

@@ -269,6 +269,24 @@ class ZSXQDatabase:
         except sqlite3.OperationalError:
             self.cursor.execute('ALTER TABLE topic_files ADD COLUMN local_path TEXT')
             print("✅ 数据库迁移：topic_files 表添加 local_path 字段")
+
+        # 文章内容表（存储从 HTML 提取的纯文本内容）
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS article_content (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic_id INTEGER,
+                article_id TEXT,
+                title TEXT,
+                text_content TEXT,
+                content_url TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (topic_id) REFERENCES topics (topic_id)
+            )
+        ''')
+        
+        # 为 article_content 表创建索引
+        self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_article_content_topic_id ON article_content(topic_id)')
+        self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_article_content_article_id ON article_content(article_id)')
             
         self.conn.commit()
     
@@ -480,7 +498,7 @@ class ZSXQDatabase:
         """获取数据库统计信息"""
         stats = {}
 
-        tables = ['groups', 'users', 'topics', 'talks', 'articles', 'images',
+        tables = ['groups', 'users', 'topics', 'talks', 'articles', 'article_content', 'images',
                  'likes', 'like_emojis', 'user_liked_emojis', 'comments',
                  'questions', 'answers']
 
@@ -1081,6 +1099,54 @@ class ZSXQDatabase:
             print(f"   ⚠️ 插入 PDF 记录失败: {e}")
             return False
 
+    def _upsert_article_content(self, topic_id: int, article_id: str, title: str,
+                                text_content: str, content_url: str):
+        """插入或更新文章纯文本内容"""
+        try:
+            # 检查是否已存在
+            self.cursor.execute(
+                'SELECT id FROM article_content WHERE topic_id = ?', (topic_id,))
+            existing = self.cursor.fetchone()
+
+            if existing:
+                self.cursor.execute('''
+                    UPDATE article_content
+                    SET article_id = ?, title = ?, text_content = ?, content_url = ?
+                    WHERE topic_id = ?
+                ''', (article_id, title, text_content, content_url, topic_id))
+            else:
+                self.cursor.execute('''
+                    INSERT INTO article_content (topic_id, article_id, title, text_content, content_url)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (topic_id, article_id, title, text_content, content_url))
+
+            self.conn.commit()
+        except Exception as e:
+            print(f"   ⚠️ 保存文章内容失败: {e}")
+
+    def get_article_content(self, topic_id: int) -> Optional[Dict[str, Any]]:
+        """获取文章纯文本内容"""
+        try:
+            self.cursor.execute('''
+                SELECT id, topic_id, article_id, title, text_content, content_url, created_at
+                FROM article_content
+                WHERE topic_id = ?
+            ''', (topic_id,))
+            row = self.cursor.fetchone()
+            if row:
+                return {
+                    'id': row[0],
+                    'topic_id': row[1],
+                    'article_id': row[2],
+                    'title': row[3],
+                    'text_content': row[4],
+                    'content_url': row[5],
+                    'created_at': row[6]
+                }
+            return None
+        except Exception as e:
+            print(f"获取文章内容失败: {e}")
+            return None
 
     def get_topic_detail(self, topic_id: int):
         """获取完整的话题详情"""

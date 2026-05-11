@@ -2701,7 +2701,7 @@ async def get_topic_detail(topic_id: int, group_id: str):
 
 @app.post("/api/topics/{topic_id}/{group_id}/refresh")
 async def refresh_topic(topic_id: int, group_id: str):
-    """实时更新单个话题信息"""
+    """实时刷新单个话题：更新统计信息 + 刷新图片链接 + 刷新评论"""
     try:
         crawler = get_crawler_for_group(group_id)
 
@@ -2711,36 +2711,76 @@ async def refresh_topic(topic_id: int, group_id: str):
 
         response = requests.get(url, headers=headers, timeout=30)
 
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('succeeded') and data.get('resp_data'):
-                topic_data = data['resp_data']['topic']
-
-                # 只更新话题的统计信息，避免创建重复记录
-                success = crawler.db.update_topic_stats(topic_data)
-
-                if not success:
-                    return {"success": False, "message": "话题不存在或更新失败"}
-
-                crawler.db.conn.commit()
-
-                return {
-                    "success": True,
-                    "message": "话题信息已更新",
-                    "updated_data": {
-                        "likes_count": topic_data.get('likes_count', 0),
-                        "comments_count": topic_data.get('comments_count', 0),
-                        "reading_count": topic_data.get('reading_count', 0),
-                        "readers_count": topic_data.get('readers_count', 0)
-                    }
-                }
-            else:
-                return {"success": False, "message": "API返回数据格式错误"}
-        else:
+        if response.status_code != 200:
             return {"success": False, "message": f"API请求失败: {response.status_code}"}
+
+        data = response.json()
+        if not data.get('succeeded') or not data.get('resp_data'):
+            return {"success": False, "message": "API返回数据格式错误"}
+
+        topic_data = data['resp_data']['topic']
+
+        # 1. 更新话题统计信息
+        success = crawler.db.update_topic_stats(topic_data)
+        if not success:
+            return {"success": False, "message": "话题不存在或更新失败"}
+
+        # 2. 刷新图片链接（重新导入images表，更新URL）
+        images_updated = 0
+        try:
+            crawler.db._import_images(topic_id, topic_data)
+            # 统计更新了多少图片
+            talk_images = topic_data.get('talk', {}).get('images', [])
+            question_images = topic_data.get('question', {}).get('images', [])
+            answer_images = topic_data.get('answer', {}).get('images', [])
+            comment_images = []
+            for comment in topic_data.get('show_comments', []):
+                comment_images.extend(comment.get('images', []))
+            images_updated = len(talk_images) + len(question_images) + len(answer_images) + len(comment_images)
+        except Exception as img_err:
+            print(f"⚠️ 刷新图片链接失败: {img_err}")
+
+        # 3. 刷新评论（如果评论数大于8，获取完整评论列表）
+        comments_fetched = 0
+        comments_count = topic_data.get('comments_count', 0)
+        try:
+            # 先导入API返回的show_comments
+            if 'show_comments' in topic_data:
+                crawler.db._import_comments(topic_id, topic_data['show_comments'])
+
+            # 如果评论数大于8，获取更多评论
+            if comments_count > 8:
+                additional_comments = crawler.fetch_all_comments(topic_id, comments_count)
+                if additional_comments:
+                    # 导入额外评论（包括评论中的图片）
+                    for comment in additional_comments:
+                        if 'images' in comment:
+                            comment_id = comment.get('comment_id')
+                            for img in comment['images']:
+                                crawler.db._upsert_image(topic_id, img, comment_id, 'comment')
+                    crawler.db.import_additional_comments(topic_id, additional_comments)
+                    comments_fetched = len(additional_comments)
+        except Exception as comment_err:
+            print(f"⚠️ 刷新评论失败: {comment_err}")
+
+        crawler.db.conn.commit()
+
+        return {
+            "success": True,
+            "message": f"话题已刷新（图片{images_updated}张，评论+{comments_fetched}条）",
+            "updated_data": {
+                "likes_count": topic_data.get('likes_count', 0),
+                "comments_count": topic_data.get('comments_count', 0),
+                "reading_count": topic_data.get('reading_count', 0),
+                "readers_count": topic_data.get('readers_count', 0),
+                "images_updated": images_updated,
+                "comments_fetched": comments_fetched
+            }
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新话题失败: {str(e)}")
+
 
 @app.post("/api/topics/{topic_id}/{group_id}/fetch-comments")
 async def fetch_more_comments(topic_id: int, group_id: str):

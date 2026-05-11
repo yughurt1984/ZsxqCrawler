@@ -957,7 +957,7 @@ class WeComWebhook:
                 self.log(f"   📐 背景图尺寸: {bg_image.size[0]} x {bg_image.size[1]}")
             
             # 干扰文字配置
-            noise_text = "（原作者微信：MK0914666）"
+            noise_text = "（请访问网页：https://xq.openshare.eu.cc/）"
             font_path = r"C:\Windows\Fonts\msyh.ttc"
             font_size = 10
             font_color = (0, 0, 0)  # 黑色
