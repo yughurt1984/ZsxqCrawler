@@ -49,6 +49,7 @@ cache
 /output/
 /images/
 temp_pdf_pages/
+/test/
 
 # local config
 config.toml

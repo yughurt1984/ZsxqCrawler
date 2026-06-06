@@ -119,9 +119,10 @@ class ZSXQFileDownloader:
 
     def log(self, message: str):
         """统一的日志输出方法"""
-        print(message)
         if self.log_callback:
             self.log_callback(message)
+        else:
+            print(message)
         
 
     def format_file_size(self, size_bytes: int) -> str:
