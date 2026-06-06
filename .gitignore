@@ -47,6 +47,10 @@ cache
 /.history/
 /downloads/
 /output/
+/test/
+/tests/
+/images/
+/temp_pdf_pages/
 
 # local config
 config.toml
