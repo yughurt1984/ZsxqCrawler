@@ -118,6 +118,20 @@ export function renderZsxqContent(content: string): string {
     }
   );
 
+  // 处理内联图片标签 <e type="image" href="..." title="..." />
+  // 知识星球文本中可能包含内联图片，转换为 <img> 标签
+  renderedContent = renderedContent.replace(
+    /<e\s+type="image"\s+href="([^"]+)"(?:\s+title="([^"]*)")?\s*\/>/g,
+    (match, encodedHref, encodedTitle) => {
+      const decodedHref = decodeTitle(encodedHref);
+      const decodedAlt = encodedTitle ? decodeTitle(encodedTitle) : '';
+      if (decodedHref) {
+        return `<img src="${decodedHref}" alt="${decodedAlt}" style="max-width: 100%; height: auto; display: block; margin: 8px 0; border-radius: 4px;" />`;
+      }
+      return decodedAlt || '';
+    }
+  );
+
   return renderedContent;
 }
 

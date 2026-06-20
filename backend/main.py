@@ -362,7 +362,7 @@ def get_crawler(log_callback=None) -> ZSXQInteractiveCrawler:
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
 
-        crawler_instance = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler_instance = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=config)
 
     return crawler_instance
 
@@ -382,7 +382,7 @@ def get_crawler_for_group(group_id: str, log_callback=None) -> ZSXQInteractiveCr
     path_manager = get_db_path_manager()
     db_path = path_manager.get_topics_db_path(group_id)
 
-    return ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+    return ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=config)
 
 def get_crawler_safe() -> Optional[ZSXQInteractiveCrawler]:
     """安全获取爬虫实例，配置未设置时返回None"""
@@ -1992,8 +1992,9 @@ def run_crawl_historical_task(task_id: str, group_id: str, pages: int, per_page:
         # 使用传入的group_id而不是配置文件中的固定值
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
+        crawl_config = load_config() or {}
 
-        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=crawl_config)
         # 设置停止检查函数
         crawler.stop_check_func = stop_check
 
@@ -2666,8 +2667,9 @@ async def crawl_all(group_id: str, request: CrawlSettingsRequest, background_tas
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
+                crawl_config = load_config() or {}
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=crawl_config)
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -2750,8 +2752,9 @@ async def crawl_incremental(group_id: str, request: CrawlHistoricalRequest, back
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
+                crawl_config = load_config() or {}
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=crawl_config)
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -2815,8 +2818,9 @@ async def crawl_latest_until_complete(group_id: str, request: CrawlSettingsReque
                 # 使用传入的group_id而不是配置文件中的固定值
                 path_manager = get_db_path_manager()
                 db_path = path_manager.get_topics_db_path(group_id)
+                crawl_config = load_config() or {}
 
-                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+                crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=crawl_config)
                 # 设置停止检查函数
                 crawler.stop_check_func = stop_check
 
@@ -5076,8 +5080,9 @@ def run_crawl_time_range_task(task_id: str, group_id: str, request: "CrawlTimeRa
         cookie = get_cookie_for_group(group_id)
         path_manager = get_db_path_manager()
         db_path = path_manager.get_topics_db_path(group_id)
+        crawl_config = load_config() or {}
 
-        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback)
+        crawler = ZSXQInteractiveCrawler(cookie, group_id, db_path, log_callback, config=crawl_config)
         crawler.stop_check_func = stop_check
 
         # 可选：应用自定义间隔设置

@@ -86,6 +86,12 @@ def _render_zsxq_inline_tags(text: str) -> str:
             if href:
                 return f"[{label}]({href})"
             return label or ""
+        if etype == "image":
+            # 内联图片标签，转换为 Markdown 图片语法
+            if href:
+                alt = title or "image"
+                return f"![{alt}]({href})"
+            return title or ""
 
         # 未知类型：尽量保留 title 文本，避免内容丢失
         if title:

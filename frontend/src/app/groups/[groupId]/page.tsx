@@ -1544,6 +1544,16 @@ const [downloadTimeDialogOpen, setDownloadTimeDialogOpen] = useState<boolean>(fa
                           style={{wordBreak: 'break-all', overflowWrap: 'anywhere'}}
                           dangerouslySetInnerHTML={createSafeHtmlWithHighlight(topic.question_text || topicDetail?.question?.text || '', searchTerm)}
                         />
+                        {/* 提问图片 */}
+                        {topicDetail?.question?.images && topicDetail.question.images.length > 0 && (
+                          <div className="mt-3">
+                            <ImageGallery
+                              images={topicDetail.question.images}
+                              size="small"
+                              groupId={groupId}
+                            />
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1562,6 +1572,16 @@ const [downloadTimeDialogOpen, setDownloadTimeDialogOpen] = useState<boolean>(fa
                           }}
                           dangerouslySetInnerHTML={createSafeHtmlWithHighlight(topic.answer_text || topicDetail?.answer?.text || '', searchTerm)}
                         />
+                        {/* 回答图片 */}
+                        {topicDetail?.answer?.images && topicDetail.answer.images.length > 0 && (
+                          <div className="mt-3">
+                            <ImageGallery
+                              images={topicDetail.answer.images}
+                              size="small"
+                              groupId={groupId}
+                            />
+                          </div>
+                        )}
                       </div>
                       {(extractPlainText(topic.answer_text || topicDetail?.answer?.text || '').split('\n').length > 4 || extractPlainText(topic.answer_text || topicDetail?.answer?.text || '').length > 300) && (
                         <div className="text-center mt-2">

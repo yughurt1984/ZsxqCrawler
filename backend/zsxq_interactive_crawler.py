@@ -35,12 +35,13 @@ except ImportError:
 class ZSXQInteractiveCrawler:
     """知识星球交互式数据采集器"""
     
-    def __init__(self, cookie: str, group_id: str, db_path: str = None, log_callback=None):
+    def __init__(self, cookie: str, group_id: str, db_path: str = None, log_callback=None, config: dict = None):
         self.cookie = self.clean_cookie(cookie)
         self.group_id = group_id
         self.log_callback = log_callback  # 日志回调函数
         self.stop_flag = False  # 停止标志
         self.stop_check_func = None  # 停止检查函数
+        self.config = config  # 配置字典
 
         # 使用路径管理器获取数据库路径
         path_manager = get_db_path_manager()
@@ -660,6 +661,7 @@ class ZSXQInteractiveCrawler:
             return {'new_topics': 0, 'updated_topics': 0, 'errors': 0}
 
         stats = {'new_topics': 0, 'updated_topics': 0, 'errors': 0}
+        new_topic_ids = []  # 记录新增话题的topic_id
 
         for topic_data in topics:
             # 在处理每个话题前检查停止标志
@@ -696,6 +698,7 @@ class ZSXQInteractiveCrawler:
                     stats['updated_topics'] += 1
                 else:
                     stats['new_topics'] += 1
+                    new_topic_ids.append(topic_id)
 
             except Exception as e:
                 stats['errors'] += 1
@@ -703,6 +706,18 @@ class ZSXQInteractiveCrawler:
         
         # 提交事务
         self.db.conn.commit()
+
+        # 爬取后文档处理（只处理新增话题）
+        if new_topic_ids and not self.is_stopped():
+            try:
+                from .zsxq_after_crawl import ZsxqAfterCrawl
+                # 筛选出新增的话题数据
+                new_topics = [t for t in topics if t.get('topic_id') in new_topic_ids]
+                after_crawl = ZsxqAfterCrawl(self, config=self.config)
+                after_crawl.process_topics(new_topics, stats)
+            except Exception as e:
+                self.log(f"⚠️ 爬取后处理异常: {e}")
+
         return stats
     
     def crawl_latest(self, count: int = 20) -> Dict[str, int]:
@@ -1352,6 +1367,15 @@ class ZSXQInteractiveCrawler:
                         self.db.conn.commit()
                         self.log(f"   💾 新话题存储: 新增{new_topics_count}, 更新{updated_topics_count}")
                         
+                        # 爬取后文档处理（处理新增话题）
+                        if new_topics_list and not self.is_stopped():
+                            try:
+                                from .zsxq_after_crawl import ZsxqAfterCrawl
+                                after_crawl = ZsxqAfterCrawl(self, config=self.config)
+                                after_crawl.process_topics(new_topics_list, {'new_topics': new_topics_count, 'updated_topics': updated_topics_count})
+                            except Exception as e:
+                                self.log(f"   ⚠️ 爬取后处理异常: {e}")
+                        
                         # 更新统计
                         total_stats['new_topics'] += new_topics_count
                         total_stats['updated_topics'] += updated_topics_count
@@ -1707,7 +1731,7 @@ def main():
         return
     
     # 创建交互式爬虫
-    crawler = ZSXQInteractiveCrawler(COOKIE, GROUP_ID, DB_PATH)
+    crawler = ZSXQInteractiveCrawler(COOKIE, GROUP_ID, DB_PATH, config=config)
     
     # 如果是自动下载模式
     if args.auto_download:
