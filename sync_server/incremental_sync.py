@@ -221,14 +221,21 @@ class IncrementalSyncManager:
         return env
 
     def _build_ssh_args(self) -> list:
-        """构建 SSH 公共参数"""
-        return [
-            "-p", str(self.config["server_port"]),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "IdentitiesOnly=yes",
-            "-i", "/home/arron/.ssh/id_rsa"
-        ]
+        """构建 SSH 公共参数（使用 Windows 原生 SSH）"""
+        ssh_key = self.config.get("ssh_key_path", "")
+        args = ["-p", str(self.config["server_port"])]
+        if ssh_key:
+            args.extend(["-i", ssh_key])
+        return args
+
+    def _build_scp_args(self) -> list:
+        """构建 SCP 公共参数（注意 SCP 用 -P 大写指定端口）"""
+        ssh_key = self.config.get("ssh_key_path", "")
+        args = ["-P", str(self.config["server_port"])]
+        if ssh_key:
+            args.extend(["-i", ssh_key])
+        return args
+
 
 
     def get_new_records(self, db_path: str, table_name: str, 
@@ -325,11 +332,12 @@ class IncrementalSyncManager:
             
             # 构建 SCP 命令
             upload_cmd = ["scp"]
-            upload_cmd.extend(self._build_ssh_args())
+            upload_cmd.extend(self._build_scp_args())
             upload_cmd.extend([str(temp_file), f"{server_user}@{server_host}:{remote_file}"])
             
-            env = self._get_ssh_env()
-            result = subprocess.run(upload_cmd, capture_output=True, text=True, check=False, env=env)
+            logger.info(f"SCP 命令: {upload_cmd}")
+            result = subprocess.run(upload_cmd, capture_output=True, text=True, check=False)
+
             
             if result.returncode != 0:
                 logger.error(f"上传失败: {result.stderr}")
@@ -344,7 +352,7 @@ class IncrementalSyncManager:
                 f"sqlite3 {server_db_path} < {remote_file} && rm {remote_file}"
             ])
             
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False, env=env)
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
 
             
             # 清理本地临时文件
@@ -601,11 +609,11 @@ class IncrementalSyncManager:
         
         # 2. 从服务器下载
         download_cmd = ["scp"]
-        download_cmd.extend(self._build_ssh_args())
+        download_cmd.extend(self._build_scp_args())
         download_cmd.extend([f"{server_user}@{server_host}:{server_auth_db}", local_auth_db])
         
-        env = self._get_ssh_env()
-        result = subprocess.run(download_cmd, capture_output=True, text=True, check=False, env=env)
+        result = subprocess.run(download_cmd, capture_output=True, text=True, check=False)
+
 
         
         if result.returncode != 0:
@@ -614,8 +622,6 @@ class IncrementalSyncManager:
         
         logger.info(f"✅ 成功从服务器备份认证数据库")
         return True
-
-
 
     
     def print_summary(self):
