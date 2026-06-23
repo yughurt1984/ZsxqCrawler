@@ -511,10 +511,10 @@ class ZsxqAfterCrawl:
 
             # 清理HTML标签
             content_clean = HTMLTagRemover.clean_html_tags(content)
-            content_preview = content_clean[:30] if len(content_clean) > 30 else content_clean
+            content_preview = content_clean[:50] if len(content_clean) > 50 else content_clean
 
             # 格式化推送内容
-            push_text = f"{content_preview}...\n\n详细内容：请访问：http://149.104.30.138:3080/groups/{group_id}"
+            push_text = f"{content_preview}...\n\n详细内容：请访问：http://xq.openshare.eu.cc/groups/{group_id}"
 
             self.log(f"📝 推送文字内容...")
 
