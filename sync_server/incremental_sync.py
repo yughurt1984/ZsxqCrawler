@@ -40,7 +40,7 @@ DEFAULT_CONFIG = {
     "local_base_dir": "../output/databases",  # ← 改为相对路径
     "local_auth_db": "../auth.db",  # ← 改为相对路径
     "server_user": "root",
-    "server_host": "149.104.30.138",
+    "server_host": "149.104.30.52",
     "server_port": 22,
     "server_base_dir": "/opt/zsxq-reader/output/databases",
     "server_auth_db": "/opt/zsxq-reader/auth.db",

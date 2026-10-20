@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
     "server_user": "root",
-    "server_host": "149.104.30.138",
+    "server_host": "149.104.30.52",
     "server_port": 22,
     "server_auth_db": "/opt/zsxq-reader/auth.db",
     "local_backup_base_dir": "E:/Documents/auth备份",

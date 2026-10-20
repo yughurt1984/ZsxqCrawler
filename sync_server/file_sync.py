@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG = {
     "local_base_dir": "../output/databases",
     "server_user": "root",
-    "server_host": "149.104.30.138",
+    "server_host": "149.104.30.52",
     "server_port": 22,
     "server_base_dir": "/opt/zsxq-reader/output/databases",
     "ssh_key_path": None,
