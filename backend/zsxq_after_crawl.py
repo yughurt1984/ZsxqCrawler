@@ -155,24 +155,6 @@ class ZsxqAfterCrawl:
                         if self.handle_article_content(article_url, topic):
                             success_count += 1
 
-                    # 如果同时有附件，继续处理
-                    if topic_files:
-                        self._rate_limit_wait("附件下载")
-                        self.log(f"   📎 继续处理附件...")
-                        self.handle_attachments(topic_files, topic)
-
-                    # 如果同时有图片，继续缓存
-                    self.handle_images(talk, group_id)
-                    continue
-
-                # ========== 分支B: 有附件 ==========
-                if topic_files:
-                    self._rate_limit_wait("附件下载")
-                    self.log(f"📎 第{i}/{len(topics)}条：检测到附件（共{len(topic_files)}个）")
-
-                    if self.handle_attachments(topic_files, topic):
-                        success_count += 1
-
                     # 如果同时有图片，继续缓存
                     self.handle_images(talk, group_id)
                     continue
@@ -283,101 +265,7 @@ class ZsxqAfterCrawl:
             traceback.print_exc()
             return False
 
-    # ============================================================
-    # 分支B：处理附件
-    # ============================================================
 
-    def handle_attachments(self, topic_files: List[Dict], topic: Dict) -> bool:
-        """
-        处理附件：下载 -> PDF水印加密 -> 更新topic_files.local_path
-
-        Args:
-            topic_files: 附件列表
-            topic: 话题数据
-
-        Returns:
-            是否处理成功
-        """
-        try:
-            topic_id = topic.get('topic_id')
-            self.log(f"📎 开始处理附件（共{len(topic_files)}个）")
-
-            downloader = self.crawler.get_file_downloader()
-            processed_count = 0
-
-            for idx, file_info in enumerate(topic_files, 1):
-                try:
-                    file_name = file_info.get('name', 'Unknown')
-                    file_id = file_info.get('file_id')
-                    safe_filename = "".join(
-                        c for c in file_name
-                        if c.isalnum() or c in '._-（）()[]{}' or '\u4e00' <= c <= '\u9fff'
-                    )
-                    if not safe_filename:
-                        safe_filename = f"file_{file_id or 'unknown'}"
-
-                    # 源文件路径
-                    source_path = os.path.join(downloader.download_dir, safe_filename)
-
-                    # 下载文件（如果不存在）
-                    if not os.path.exists(source_path):
-                        file_data = {'file': file_info}
-                        result = downloader.download_file(file_data)
-                        if not result:
-                            self.log(f"   ❌ 文件下载失败: {file_name}")
-                            continue
-
-                    # 确认文件存在
-                    if not os.path.exists(source_path):
-                        self.log(f"   ❌ 文件不存在: {source_path}")
-                        continue
-
-                    local_path = os.path.abspath(source_path)
-
-                    # 处理PDF文件：水印 + 加密
-                    if source_path.lower().endswith('.pdf'):
-                        self.log(f"   🖼️ 处理PDF: {safe_filename}")
-
-                        temp_processed = source_path.replace('.pdf', '_temp.pdf')
-
-                        # 水印
-                        if not self._add_background_and_noise_to_pdf(
-                                source_path, temp_processed, group_id=self.crawler.group_id):
-                            self.log(f"   ⚠️ 水印添加失败，使用源文件")
-                            temp_processed = source_path
-
-                        # 加密
-                        self._encrypt_pdf(temp_processed)
-
-                        # 用处理后的文件覆盖源文件
-                        if os.path.exists(source_path) and temp_processed != source_path:
-                            os.remove(source_path)
-                            shutil.move(temp_processed, source_path)
-
-                        self.log(f"   ✅ PDF处理完成: {safe_filename}")
-
-                    # 更新 topic_files.local_path
-                    if file_id:
-                        self.crawler.db.update_topic_file_local_path(topic_id, file_id, local_path)
-                        self.log(f"   ✅ 已更新 local_path: {safe_filename}")
-
-                    processed_count += 1
-
-                    # 附件间隔
-                    if idx < len(topic_files):
-                        self._rate_limit_wait("附件下载")
-
-                except Exception as e:
-                    self.log(f"   ❌ 附件处理异常: {e}")
-                    traceback.print_exc()
-
-            self.log(f"   ✅ 附件处理完成：{processed_count}/{len(topic_files)}个")
-            return processed_count > 0
-
-        except Exception as e:
-            self.log(f"   ❌ 附件处理失败: {e}")
-            traceback.print_exc()
-            return False
 
     # ============================================================
     # 分支C：处理图片

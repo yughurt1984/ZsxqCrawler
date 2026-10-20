@@ -1,6 +1,6 @@
 {
   "server_user": "root",
-  "server_host": "149.104.30.138",
+  "server_host": "149.104.30.52",
   "server_port": 22,
   "server_base_dir": "/opt/zsxq-reader/output/databases",
   "server_auth_db": "/opt/zsxq-reader/auth.db",
