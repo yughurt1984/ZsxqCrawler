@@ -1812,7 +1812,7 @@ async def create_account(request: AccountCreateRequest):
             try:
                 import threading
                 threading.Thread(
-                    target=_fetch_and_store_account_self,
+                    target=_fetch_and_store_account_self_background,
                     args=(new_id, acc.get("cookie") or request.cookie),
                     daemon=True,
                 ).start()
@@ -1860,26 +1860,44 @@ async def get_group_account(group_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取群组账号失败: {str(e)}")
 
-# 账号“自我信息”持久化 (/v3/users/self)
+# 账号“自我信息”持久化 (/v3/users/self，兼容回退 /v2/users/self)
 def _fetch_and_store_account_self(account_id: str, cookie: str) -> Optional[Dict[str, Any]]:
-    """同步抓取 /v3/users/self 并写入数据库；失败时返回 None。供后台线程或 to_thread 调用。"""
+    """同步抓取账号自我信息并写入数据库；供后台线程或 to_thread 调用。"""
     try:
         cookie = normalize_zsxq_cookie(cookie)
         if not cookie:
             return None
         headers = build_stealth_headers(cookie)
-        resp = requests.get('https://api.zsxq.com/v3/users/self', headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get('succeeded'):
-            return None
+        api_errors = []
+        for api_version in ('v3', 'v2'):
+            try:
+                resp = requests.get(
+                    f'https://api.zsxq.com/{api_version}/users/self',
+                    headers=headers,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get('succeeded'):
+                    break
+                code = data.get('code') or data.get('error_code') or 'unknown'
+                message = data.get('message') or data.get('error_message') or '未提供错误信息'
+                api_errors.append(
+                    f"{api_version}: HTTP {resp.status_code}, code={code}, message={message}"
+                )
+            except Exception as e:
+                api_errors.append(f"{api_version}: {e}")
+        else:
+            raise RuntimeError("; ".join(api_errors))
 
         rd = data.get('resp_data', {}) or {}
         user = rd.get('user', {}) or {}
         wechat = (rd.get('accounts', {}) or {}).get('wechat', {}) or {}
+        if not isinstance(user, dict) or not user:
+            raise ValueError("成功响应中缺少 resp_data.user")
 
         self_info = {
-            "uid": user.get("uid"),
+            "uid": user.get("uid") or user.get("user_id") or user.get("id"),
             "name": user.get("name") or wechat.get("name"),
             "avatar_url": user.get("avatar_url") or wechat.get("avatar_url"),
             "location": user.get("location"),
@@ -1891,7 +1909,15 @@ def _fetch_and_store_account_self(account_id: str, cookie: str) -> Optional[Dict
         return db.get_self_info(account_id)
     except Exception as e:
         print(f"⚠️ 抓取账号 {account_id} self 信息失败: {e}")
-        return None
+        raise
+
+
+def _fetch_and_store_account_self_background(account_id: str, cookie: str) -> None:
+    """后台抓取失败只记录日志，不影响账号创建。"""
+    try:
+        _fetch_and_store_account_self(account_id, cookie)
+    except Exception:
+        pass
 
 
 @app.get("/api/accounts/{account_id}/self")
@@ -1920,9 +1946,12 @@ async def refresh_account_self(account_id: str):
         if not cookie:
             raise HTTPException(status_code=400, detail="Account has no configured Cookie")
 
-        info = await asyncio.to_thread(_fetch_and_store_account_self, account_id, cookie)
+        try:
+            info = await asyncio.to_thread(_fetch_and_store_account_self, account_id, cookie)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"刷新 /v3/users/self 失败: {e}") from e
         if info is None:
-            raise HTTPException(status_code=502, detail="抓取或解析 /v3/users/self 失败")
+            raise HTTPException(status_code=502, detail="账号 Cookie 为空，无法抓取 /v3/users/self")
         return {"self": info}
     except HTTPException:
         raise
@@ -1955,9 +1984,12 @@ async def refresh_group_account_self(group_id: str):
         if not cookie:
             raise HTTPException(status_code=400, detail="未找到可用Cookie，请先配置账号或默认Cookie")
 
-        info = await asyncio.to_thread(_fetch_and_store_account_self, account_id, cookie)
+        try:
+            info = await asyncio.to_thread(_fetch_and_store_account_self, account_id, cookie)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"刷新 /v3/users/self 失败: {e}") from e
         if info is None:
-            raise HTTPException(status_code=502, detail="抓取或解析 /v3/users/self 失败")
+            raise HTTPException(status_code=502, detail="账号 Cookie 为空，无法抓取 /v3/users/self")
         return {"self": info}
     except HTTPException:
         raise
