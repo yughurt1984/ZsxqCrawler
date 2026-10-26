@@ -3,9 +3,11 @@ import tempfile
 import unittest
 
 from backend.zsxq_file_downloader import ZSXQFileDownloader
+from backend.accounts_sql_manager import AccountsSQLManager
 from backend.zsxq_request_profiles import (
     build_zsxq_file_stream_headers,
     build_zsxq_mobile_headers,
+    normalize_zsxq_cookie,
 )
 
 
@@ -34,6 +36,22 @@ class RecordingSession:
 
 
 class MobileDownloadProfileTest(unittest.TestCase):
+    def test_normalizes_quoted_and_multiline_cookie_values(self):
+        self.assertEqual(
+            "a=1; b=2",
+            normalize_zsxq_cookie("  'a=1;  b=2'  \nignored=value"),
+        )
+
+    def test_account_manager_stores_normalized_cookie(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = AccountsSQLManager(db_path=os.path.join(tmpdir, "accounts.db"))
+            try:
+                account = manager.add_account('"a=1;  b=2\\n"')
+            finally:
+                manager.conn.close()
+
+        self.assertEqual("a=1; b=2", account["cookie"])
+
     def test_mobile_headers_identify_as_phone(self):
         headers = build_zsxq_mobile_headers("a=b", "123")
 

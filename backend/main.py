@@ -69,6 +69,7 @@ from .zsxq_request_profiles import (
     build_zsxq_file_stream_headers,
     build_zsxq_mobile_headers,
     is_mobile_only_error,
+    normalize_zsxq_cookie,
 )
 from .zsxq_markdown_exporter import (
     article_html_to_markdown,
@@ -1812,7 +1813,7 @@ async def create_account(request: AccountCreateRequest):
                 import threading
                 threading.Thread(
                     target=_fetch_and_store_account_self,
-                    args=(new_id, request.cookie),
+                    args=(new_id, acc.get("cookie") or request.cookie),
                     daemon=True,
                 ).start()
             except Exception as e:
@@ -1863,6 +1864,7 @@ async def get_group_account(group_id: str):
 def _fetch_and_store_account_self(account_id: str, cookie: str) -> Optional[Dict[str, Any]]:
     """同步抓取 /v3/users/self 并写入数据库；失败时返回 None。供后台线程或 to_thread 调用。"""
     try:
+        cookie = normalize_zsxq_cookie(cookie)
         if not cookie:
             return None
         headers = build_stealth_headers(cookie)

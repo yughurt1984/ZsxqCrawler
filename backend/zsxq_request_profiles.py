@@ -5,7 +5,7 @@
 import random
 import time
 import uuid
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 
 MOBILE_USER_AGENTS = [
@@ -21,6 +21,31 @@ MOBILE_USER_AGENTS = [
         "Mobile Safari/537.36"
     ),
 ]
+
+
+def normalize_zsxq_cookie(cookie: Union[str, bytes]) -> str:
+    """Normalize copied Cookie values before storing or sending them."""
+    if isinstance(cookie, bytes):
+        cookie = cookie.decode("utf-8")
+
+    cookie = cookie.strip()
+    if "\n" in cookie:
+        cookie = cookie.split("\n", 1)[0].strip()
+    cookie = cookie.rstrip("\\")
+
+    if cookie.startswith("b'") and cookie.endswith("'"):
+        cookie = cookie[2:-1]
+    elif cookie.startswith('b"') and cookie.endswith('"'):
+        cookie = cookie[2:-1]
+    elif cookie.startswith("'") and cookie.endswith("'"):
+        cookie = cookie[1:-1]
+    elif cookie.startswith('"') and cookie.endswith('"'):
+        cookie = cookie[1:-1]
+
+    cookie = cookie.replace("\\n", "")
+    cookie = cookie.replace('\\"', '"')
+    cookie = cookie.replace("\\'", "'")
+    return "; ".join(part.strip() for part in cookie.split(";"))
 
 
 def _mobile_platform_for_user_agent(user_agent: str) -> str:

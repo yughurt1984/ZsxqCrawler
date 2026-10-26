@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 
 from .db_path_manager import get_db_path_manager
+from .zsxq_request_profiles import normalize_zsxq_cookie
 
 _lock = threading.RLock()  # 使用可重入锁，避免同一线程重复获取锁导致死锁
 
@@ -149,6 +150,7 @@ class AccountsSQLManager:
 
     def add_account(self, cookie: str, name: Optional[str] = None) -> Dict[str, Any]:
         """新增账号"""
+        cookie = normalize_zsxq_cookie(cookie)
         if not cookie or not cookie.strip():
             raise ValueError("cookie cannot be empty")
 
@@ -166,7 +168,7 @@ class AccountsSQLManager:
                 (
                     account_id,
                     name or f"账号{int(time.time() * 1000) % 10000}",
-                    cookie.strip(),
+                    cookie,
                     now,
                 ),
             )

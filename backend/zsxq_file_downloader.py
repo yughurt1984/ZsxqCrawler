@@ -21,6 +21,7 @@ from .zsxq_request_profiles import (
     build_zsxq_file_stream_headers,
     build_zsxq_mobile_headers,
     is_mobile_only_error,
+    normalize_zsxq_cookie,
 )
 from .zsxq_retry import (
     ensure_global_max_retries,
@@ -243,39 +244,7 @@ class ZSXQFileDownloader:
             str: 清理后的Cookie字符串
         """
         try:
-            # 如果是bytes类型，先解码
-            if isinstance(cookie, bytes):
-                cookie = cookie.decode('utf-8')
-
-            # 去除多余的空格和换行符
-            cookie = cookie.strip()
-
-            # 如果有多行，只取第一行
-            if '\n' in cookie:
-                cookie = cookie.split('\n')[0]
-
-            # 去除末尾的反斜杠
-            cookie = cookie.rstrip('\\')
-
-            # 去除可能的前缀b和引号
-            if cookie.startswith("b'") and cookie.endswith("'"):
-                cookie = cookie[2:-1]
-            elif cookie.startswith('b"') and cookie.endswith('"'):
-                cookie = cookie[2:-1]
-            elif cookie.startswith("'") and cookie.endswith("'"):
-                cookie = cookie[1:-1]
-            elif cookie.startswith('"') and cookie.endswith('"'):
-                cookie = cookie[1:-1]
-
-            # 处理转义字符
-            cookie = cookie.replace('\\n', '')
-            cookie = cookie.replace('\\"', '"')
-            cookie = cookie.replace("\\'", "'")
-
-            # 确保分号后有空格
-            cookie = '; '.join(part.strip() for part in cookie.split(';'))
-
-            return cookie
+            return normalize_zsxq_cookie(cookie)
         except Exception as e:
             print(f"Cookie清理失败: {e}")
             return cookie  # 返回原始值
